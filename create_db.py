@@ -3,17 +3,37 @@ import os
 import sys
 import re
 import itertools
+import json
+import pickle
+from utils import *
 
 PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
+CACHE_DIR = os.path.join(PROJECT, "cache")
+if not os.path.isdir(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 ANNOTATION_FILE = os.path.join(
     PROJECT, "conll14st-test-data", "alt", "official-2014.combined-withalt.m2")
 NOOP = "noop"
 
-print("check apply_changes functions")
+def iterate_chains(ranks, ids=None):
+    if ids == None:
+        ids = itertools.repeat(ids)
+    else:
+        assert len(ids) == len(ranks)
 
+    for sentence_id, sentence_chains in zip(ranks, ids):
+        for chain in sentence:
+            if sentence_id is not None:
+                yield chain, sentence_id
+            else:
+                yield chain
+
+def iterate_sentence_changes(ranks):
+    for chain in iterate_chains(ranks):
+        for tple in chain:
+            yield tple
 
 def apply_changes(sentence, changes):
-
     changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))
     res = []
     last_end = 0
@@ -50,7 +70,12 @@ def find_in_iter(iterable, key):
     return key == iterable
 
 
-def create_ranks(file, max_permutations=100, filter_annot_changes=lambda x: True, ignore_noop=True, max_changes=None):
+def create_ranks(file, max_permutations=100, filter_annot_chains=lambda x: True, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
+    if ids_out_file is not None and ranks_out_file is not None:
+        if os.path.isfile(ranks_out_file) and os.path.isfile(ids_out_file):
+            print("reading ranks from file")
+            return load_object_by_ext(ranks_out_file), load_object_by_ext(ids_out_file)
+
     db = []  # source, changes_per_annotator
     changes = []
     source = None
@@ -76,31 +101,37 @@ def create_ranks(file, max_permutations=100, filter_annot_changes=lambda x: True
     total_sentences = 0
     total_annotations = 0
     ranks = []  # ranks[sentence][permutation][sentence, changes applied]
-    for source, all_changes in db:
-        sentence_variations = []
+    sentence_ids = []
+    for sentence_id, (source, all_changes) in enumerate(db):
+        sentence_chains = []
         if ignore_noop:
 
             if find_in_iter(all_changes, NOOP):
                 continue
-        for annot_changes in all_changes:
-            annot_changes = list(filter(filter_annot_changes, annot_changes))
+        for annot_chains in all_changes:
+            annot_chains = list(filter(filter_annot_chains, annot_chains))
             total_annotations += 1
-            for permutation_id, changes in zip(range(max_permutations), itertools.permutations(annot_changes, max_changes)):
+            for permutation_id, changes in zip(range(max_permutations), itertools.permutations(annot_chains, max_changes)):
                 rank = []
-                for i in range(len(annot_changes) + 1):
+                for i in range(len(annot_chains) + 1):
                     rank.append(
                         (apply_changes(source, changes[:i]), changes[:i]))
                     total_sentences += 1
                     # if total_sentences % 1000 == 0:
                     #     print ("created a total of", total_sentences, "sentences")
-                sentence_variations.append(rank)
-        if len(sentence_variations) > 1:
-            ranks.append(sentence_variations)
+                sentence_chains.append(rank)
+        if len(sentence_chains) > 1:
+            sentence_ids.append(sentence_id)
+            ranks.append(sentence_chains)
             if len(ranks) % 10 == 0:
                 print("calculated for", len(ranks), "source sentences")
     print("Created", total_sentences, "sentences based on", len(ranks),
           "eligible sentences and a total of", total_annotations, "annotations.")
-    return ranks
+    if ids_out_file is not None:
+        save_object_by_ext(sentence_ids, ids_out_file)
+    if ranks_out_file is not None:
+        save_object_by_ext(ranks, ranks_out_file)
+    return ranks, sentence_ids
 
 
 def create_levelled_files(ranks, file_num):
@@ -109,9 +140,9 @@ def create_levelled_files(ranks, file_num):
     files = []
     for i in range(file_num):
         file = []
-        for sentence_variations in ranks:
-            sentences = sentence_variations[
-                np.random.randint(len(sentence_variations))]
+        for sentence_chains in ranks:
+            sentences = sentence_chains[
+                np.random.randint(len(sentence_chains))]
             corrections_num = min(i, len(sentences) - 1)
             line = sentences[corrections_num][0]
             file.append(line)
@@ -120,10 +151,13 @@ def create_levelled_files(ranks, file_num):
 
 
 def main():
-    max_permutations = 100
-    ranks = create_ranks(ANNOTATION_FILE)
-    # print(ranks[0][:2])
-    print([x[:2] for x in create_levelled_files(ranks, 5)]
+    max_permutations = 1
+    filename = str(max_permutations) + "_" + "rank" + ".json"
+    ids_filename = os.path.join(CACHE_DIR,  "id" + filename)
+    ranks_filename = os.path.join(CACHE_DIR,  "id" + filename)
+    ranks = create_ranks(ANNOTATION_FILE, max_permutations, ranks_out_file=ranks_filename, ids_out_file=ids_filename)
+    print(ranks[0][:2])
+    # print([x[:2] for x in create_levelled_files(ranks, 5)])
 
 
 if __name__ == '__main__':
