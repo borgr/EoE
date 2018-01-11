@@ -1,4 +1,5 @@
 import os
+import re
 import numpy as np
 import json
 import pickle
@@ -49,3 +50,66 @@ def get_lines_from_file(filename, lines, normalize=lambda x: x):
             lines = np.array(lines)
             text = text[lines]
         return (normalize(line.replace("\n", "")) for line in text)
+
+
+def apply_changes(sentence, changes):
+    changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))
+    res = []
+    last_end = 0
+    s = sentence.split()
+    for change in changes:
+        start = int(change[0])
+        assert last_end == 0 or last_end <= start, "changes collide in places:" + \
+            str(last_end) + ", " + str(start) + \
+            "\nSentence: " + sentence + "\nChanges " + str(changes)
+        if start == -1:
+            print("noop action, no change applied")
+            assert change[2] == NOOP
+            print(changes)
+            raise changes
+            return sentence
+        res += s[last_end:start] + [change[3]]
+        last_end = int(change[1])
+    res += s[last_end:]
+    return re.sub("\s+", " ", " ".join(res))
+
+
+def split_changes_by_annot(changes):
+    res = {}
+    for change in changes:
+        annot = change[-1]
+        if annot not in res:
+            res[annot] = []
+        res[annot].append(change)
+    return list(res.values())
+
+
+def find_in_iter(iterable, key):
+    if hasattr(iterable, '__iter__') and type(iterable) != type(key):
+        return any((find_in_iter(item, key) for item in iterable))
+    return key == iterable
+
+
+def iterate_chains(ranks, ids=None):
+    if ids == None:
+        ids = itertools.repeat(ids)
+    else:
+        assert len(ids) == len(ranks)
+
+    for sentence_chains, sentence_id in zip(ranks, ids):
+        for chain in sentence_chains:
+            if sentence_id is not None:
+                yield chain, sentence_id
+            else:
+                yield chain
+
+
+def traverse_ranks(ranks):
+    for tple in traverse_chains(iterate_chains(ranks)):
+        yield tple
+
+
+def traverse_chains(chains):
+    for chain in chains:
+        for tple in chain:
+            yield tple

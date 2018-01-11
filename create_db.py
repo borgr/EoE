@@ -9,65 +9,6 @@ ANNOTATION_FILE = CONLL_ANNOTATION_FILE
 
 NOOP = "noop"
 
-
-def iterate_chains(ranks, ids=None):
-    if ids == None:
-        ids = itertools.repeat(ids)
-    else:
-        assert len(ids) == len(ranks)
-
-    for sentence_chains, sentence_id in zip(ranks, ids):
-        for chain in sentence_chains:
-            if sentence_id is not None:
-                yield chain, sentence_id
-            else:
-                yield chain
-
-
-def iterate_sentence_changes(ranks):
-    for chain in iterate_chains(ranks):
-        for tple in chain:
-            yield tple
-
-
-def apply_changes(sentence, changes):
-    changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))
-    res = []
-    last_end = 0
-    s = sentence.split()
-    for change in changes:
-        start = int(change[0])
-        assert last_end == 0 or last_end <= start, "changes collide in places:" + \
-            str(last_end) + ", " + str(start) + \
-            "\nSentence: " + sentence + "\nChanges " + str(changes)
-        if start == -1:
-            print("noop action, no change applied")
-            assert change[2] == NOOP
-            print(changes)
-            raise changes
-            return sentence
-        res += s[last_end:start] + [change[3]]
-        last_end = int(change[1])
-    res += s[last_end:]
-    return re.sub("\s+", " ", " ".join(res))
-
-
-def split_changes_by_annot(changes):
-    res = {}
-    for change in changes:
-        annot = change[-1]
-        if annot not in res:
-            res[annot] = []
-        res[annot].append(change)
-    return list(res.values())
-
-
-def find_in_iter(iterable, key):
-    if hasattr(iterable, '__iter__') and type(iterable) != type(key):
-        return any((find_in_iter(item, key) for item in iterable))
-    return key == iterable
-
-
 def create_ranks(file, max_permutations=100000, filter_annot_chains=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
     if ids_out_file is not None and ranks_out_file is not None:
         if os.path.isfile(ranks_out_file) and os.path.isfile(ids_out_file):
