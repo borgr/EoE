@@ -3,17 +3,12 @@ import os
 import sys
 import re
 import itertools
-import json
-import pickle
 from utils import *
+# ANNOTATION_FILE = BN_ANNOTATION_FILE
+ANNOTATION_FILE = CONLL_ANNOTATION_FILE
 
-PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
-CACHE_DIR = os.path.join(PROJECT, "cache")
-if not os.path.isdir(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
-ANNOTATION_FILE = os.path.join(
-    PROJECT, "conll14st-test-data", "alt", "official-2014.combined-withalt.m2")
 NOOP = "noop"
+
 
 def iterate_chains(ranks, ids=None):
     if ids == None:
@@ -21,17 +16,19 @@ def iterate_chains(ranks, ids=None):
     else:
         assert len(ids) == len(ranks)
 
-    for sentence_id, sentence_chains in zip(ranks, ids):
-        for chain in sentence:
+    for sentence_chains, sentence_id in zip(ranks, ids):
+        for chain in sentence_chains:
             if sentence_id is not None:
                 yield chain, sentence_id
             else:
                 yield chain
 
+
 def iterate_sentence_changes(ranks):
     for chain in iterate_chains(ranks):
         for tple in chain:
             yield tple
+
 
 def apply_changes(sentence, changes):
     changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))
@@ -41,7 +38,8 @@ def apply_changes(sentence, changes):
     for change in changes:
         start = int(change[0])
         assert last_end == 0 or last_end <= start, "changes collide in places:" + \
-            str(last_end) + "," + str(start) + str(changes)
+            str(last_end) + ", " + str(start) + \
+            "\nSentence: " + sentence + "\nChanges " + str(changes)
         if start == -1:
             print("noop action, no change applied")
             assert change[2] == NOOP
@@ -70,12 +68,11 @@ def find_in_iter(iterable, key):
     return key == iterable
 
 
-def create_ranks(file, max_permutations=100, filter_annot_chains=lambda x: True, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
+def create_ranks(file, max_permutations=100000, filter_annot_chains=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
     if ids_out_file is not None and ranks_out_file is not None:
         if os.path.isfile(ranks_out_file) and os.path.isfile(ids_out_file):
             print("reading ranks from file")
             return load_object_by_ext(ranks_out_file), load_object_by_ext(ids_out_file)
-
     db = []  # source, changes_per_annotator
     changes = []
     source = None
@@ -100,12 +97,14 @@ def create_ranks(file, max_permutations=100, filter_annot_chains=lambda x: True,
 
     total_sentences = 0
     total_annotations = 0
+    print("annotators_num")
     ranks = []  # ranks[sentence][permutation][sentence, changes applied]
     sentence_ids = []
     for sentence_id, (source, all_changes) in enumerate(db):
         sentence_chains = []
+        if min_annotators_per_sentence > len(all_changes):
+            continue
         if ignore_noop:
-
             if find_in_iter(all_changes, NOOP):
                 continue
         for annot_chains in all_changes:
@@ -141,22 +140,32 @@ def create_levelled_files(ranks, file_num):
     for i in range(file_num):
         file = []
         for sentence_chains in ranks:
-            sentences = sentence_chains[
-                np.random.randint(len(sentence_chains))]
+            sentences = np.random.choice(sentence_chains)
             corrections_num = min(i, len(sentences) - 1)
             line = sentences[corrections_num][0]
             file.append(line)
         files.append(file)
     return files
 
+# def combine_bn_with_alt(bn, alt, out)
+
 
 def main():
+    # combine_bn_with_alt(BN_ANNOTATION_FILE, CONLL_ANNOTATION_FILE, ANNOTATION_FILE)
     max_permutations = 1
-    filename = str(max_permutations) + "_" + "rank" + ".json"
+    if ANNOTATION_FILE == BN_ANNOTATION_FILE:
+        min_annotators_per_sentence = 10
+        annot = "BN"
+    elif ANNOTATION_FILE == CONLL_ANNOTATION_FILE:
+        min_annotators_per_sentence = 2
+        annot = "NUCLE"
+    filename = str(max_permutations) + "_" + \
+        str(min_annotators_per_sentence) + "_" + annot + "rank" + ".json"
     ids_filename = os.path.join(CACHE_DIR,  "id" + filename)
     ranks_filename = os.path.join(CACHE_DIR,  "id" + filename)
-    ranks = create_ranks(ANNOTATION_FILE, max_permutations, ranks_out_file=ranks_filename, ids_out_file=ids_filename)
-    print(ranks[0][:2])
+    ranks = create_ranks(ANNOTATION_FILE, max_permutations, ranks_out_file=ranks_filename,
+                         ids_out_file=ids_filename, min_annotators_per_sentence=min_annotators_per_sentence)
+    # print(ranks[0][:2])
     # print([x[:2] for x in create_levelled_files(ranks, 5)])
 
 

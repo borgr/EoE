@@ -1,4 +1,22 @@
+import os
 import numpy as np
+import json
+import pickle
+
+PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
+CACHE_DIR = os.path.join(PROJECT, "cache")
+if not os.path.isdir(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+ASSESS_DIR = os.path.join(PROJECT, "assess_learner_language")
+DATA_DIR = os.path.join(ASSESS_DIR, "data")
+REFERENCE_DIR = os.path.join(DATA_DIR, "references")
+
+CONLL_ANNOTATION_FILE = os.path.join(
+    PROJECT, "conll14st-test-data", "alt", "official-2014.combined-withalt.m2")
+print("not using alternatives")
+BN_ANNOTATION_FILE = os.path.join(REFERENCE_DIR, "BN_corrected.m2")
+
 
 def load_object_by_ext(filename):
     ext = os.path.splitext(filename)[1]
@@ -22,6 +40,7 @@ def save_object_by_ext(obj, filename):
             return pickle.dump(obj, fl)
     else:
         raise "format not supported" + ext
+
 
 def get_lines_from_file(filename, lines, normalize=lambda x: x):
     with open(filename) as fl:
