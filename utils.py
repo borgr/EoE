@@ -1,4 +1,5 @@
 import os
+import itertools
 import re
 import numpy as np
 import json
@@ -15,9 +16,13 @@ REFERENCE_DIR = os.path.join(DATA_DIR, "references")
 
 CONLL_ANNOTATION_FILE = os.path.join(
     PROJECT, "conll14st-test-data", "alt", "official-2014.combined-withalt.m2")
-print("not using alternatives")
+
 BN_ANNOTATION_FILE = os.path.join(REFERENCE_DIR, "BN_corrected.m2")
 
+
+########################################################################################################33
+###                                       File Manipulation
+########################################################################################################33
 
 def load_object_by_ext(filename):
     ext = os.path.splitext(filename)[1]
@@ -27,6 +32,9 @@ def load_object_by_ext(filename):
     elif ext in [".pkl", ".pckl", ".pickl", ".pickle"]:
         with open(filename, "rb") as fl:
             return pickle.load(fl)
+    elif ext in [".txt", ".log", ".out", ".crps"]:
+        with open(filename, "r") as fl:
+            return fl.read()
     else:
         raise "format not supported" + ext
 
@@ -39,6 +47,9 @@ def save_object_by_ext(obj, filename):
     elif ext in [".pkl", ".pckl", ".pickl", ".pickle"]:
         with open(filename, "wb") as fl:
             return pickle.dump(obj, fl)
+    elif ext in [".txt", ".log", ".out", ".crps"]:
+        with open(filename, "w") as fl:
+            return fl.write(obj)
     else:
         raise "format not supported" + ext
 
@@ -51,6 +62,24 @@ def get_lines_from_file(filename, lines, normalize=lambda x: x):
             text = text[lines]
         return (normalize(line.replace("\n", "")) for line in text)
 
+########################################################################################################33
+###                                       General
+########################################################################################################33
+
+def choose_uniformely(lst):
+    return lst[np.random.randint(len(lst))]
+
+def binomial_parameters_by_mean_and_var(mean, var):
+    if mean == 0:
+        return 1, 0
+    p = (mean - var) / mean
+    n = mean / p  # explicitly: (mean ** 2) / (mean - var)
+    return n, p
+
+
+########################################################################################################33
+###                                       Project DB specific
+########################################################################################################33
 
 def apply_changes(sentence, changes):
     changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))

@@ -4,16 +4,16 @@ import sys
 import re
 import itertools
 from utils import *
+
 # ANNOTATION_FILE = BN_ANNOTATION_FILE
+# print("not using alternatives")
+
 ANNOTATION_FILE = CONLL_ANNOTATION_FILE
 
 NOOP = "noop"
 
-def create_ranks(file, max_permutations=100000, filter_annot_chains=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
-    if ids_out_file is not None and ranks_out_file is not None:
-        if os.path.isfile(ranks_out_file) and os.path.isfile(ids_out_file):
-            print("reading ranks from file")
-            return load_object_by_ext(ranks_out_file), load_object_by_ext(ids_out_file)
+
+def parse_m2_to_db(file):
     db = []  # source, changes_per_annotator
     changes = []
     source = None
@@ -35,10 +35,17 @@ def create_ranks(file, max_permutations=100000, filter_annot_chains=lambda x: Tr
                 changes.append(properties)
             else:
                 raise "unrecognized line " + line
+    return db
 
+
+def create_ranks(m2file, max_permutations=100000, filter_annot_chains=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, ranks_out_file=None, ids_out_file=None):
+    if ids_out_file is not None and ranks_out_file is not None:
+        if os.path.isfile(ranks_out_file) and os.path.isfile(ids_out_file):
+            print("reading ranks from file")
+            return load_object_by_ext(ranks_out_file), load_object_by_ext(ids_out_file)
+    db = parse_m2_to_db(m2file)
     total_sentences = 0
     total_annotations = 0
-    print("annotators_num")
     ranks = []  # ranks[sentence][permutation][sentence, changes applied]
     sentence_ids = []
     for sentence_id, (source, all_changes) in enumerate(db):
@@ -81,14 +88,71 @@ def create_levelled_files(ranks, file_num):
     for i in range(file_num):
         file = []
         for sentence_chains in ranks:
-            sentences = np.random.choice(sentence_chains)
+            sentences = choose_uniformely(sentence_chains)
             corrections_num = min(i, len(sentences) - 1)
             line = sentences[corrections_num][0]
             file.append(line)
         files.append(file)
     return files
 
-# def combine_bn_with_alt(bn, alt, out)
+
+def create_corpora(m2file, prob_vars, prob=None, num_sampled=1, filter_annot_chains=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, corpora_basename=None, ids_out_file=None):
+
+    prob_vars = np.array(prob_vars)
+    if len(prob_vars.shape) == 1:
+        prob_vars = np.expand_dims(prob_vars, axis=1)
+    if prob is None:
+        if prob_vars.shape[1] == 1:
+            print("probability not specified, using prob_vars without variance")
+            prob = lambda x: x
+        elif prob_vars.shape[1] == 2:
+            print("probability not specified, using binomial distribution")
+            prob = np.random.binomial
+
+    filenames = []
+    if ids_out_file is not None and corpora_basename is not None:
+        root = os.path.dirname(corpora_basename)
+        basename = os.path.basename(corpora_basename)
+        for vrs in prob_vars:
+            repr_vars = ",".join([str(var) for var in vrs]) + "_"
+            filename = os.path.join(root, repr_vars + basename)
+            filenames.append(filename)
+        if os.path.isfile(corpora_basename) and os.path.isfile(ids_out_file):
+            print("reading corpora from file")
+            corpora = [load_object_by_ext(filename) for filename in filenames]
+            return corpora, load_object_by_ext(ids_out_file)
+    db = parse_m2_to_db(m2file)
+    corpora = []
+    for vrs in prob_vars:
+        sentence_ids = []
+        sentences = []
+        corpora.append(sentences)
+        for sentence_id, (source, all_changes) in enumerate(db):
+            if min_annotators_per_sentence > len(all_changes):
+                continue
+            if ignore_noop:
+                if find_in_iter(all_changes, NOOP):
+                    continue
+            for i in range(num_sampled):
+                all_changes = [list(filter(filter_annot_chains, annot_chains))
+                               for annot_chains in all_changes]
+                all_changes = [x for x in all_changes if x != []]
+                if all_changes == []:
+                    break
+                changes = choose_uniformely(all_changes)
+                # print(changes)
+                changes = np.random.permutation(changes).tolist()
+                # print(changes)
+                changes_num = max(int(prob(*vrs)), 0)
+                changes = changes[:changes_num]
+                sentences.append((apply_changes(source, changes), changes))
+                sentence_ids.append(sentence_id)
+    for filename, corpus in zip(filenames, corpora):
+        assert(len(sentence_ids) == len(corpus))
+        save_object_by_ext(corpus, filename)
+    if ids_out_file is not None:
+        save_object_by_ext(sentence_ids, ids_out_file)
+    return corpora, sentence_ids
 
 
 def main():
@@ -103,9 +167,23 @@ def main():
     filename = str(max_permutations) + "_" + \
         str(min_annotators_per_sentence) + "_" + annot + "rank" + ".json"
     ids_filename = os.path.join(CACHE_DIR,  "id" + filename)
-    ranks_filename = os.path.join(CACHE_DIR,  "id" + filename)
-    ranks = create_ranks(ANNOTATION_FILE, max_permutations, ranks_out_file=ranks_filename,
-                         ids_out_file=ids_filename, min_annotators_per_sentence=min_annotators_per_sentence)
+    ranks_filename = os.path.join(CACHE_DIR,  "rank" + filename)
+    corpora_ids_filename = os.path.join(CACHE_DIR,  "corora_id" + filename)
+    corpora_basename = os.path.join(CACHE_DIR,  "corpus" + filename)
+
+    ranks, ids = create_ranks(ANNOTATION_FILE, max_permutations, ranks_out_file=ranks_filename,
+                              ids_out_file=ids_filename, min_annotators_per_sentence=min_annotators_per_sentence)
+    corpus_sizes = [0, 2, 4, 6, 8]
+    exact_prob_vars = corpus_sizes
+    bin_prob_vars = [binomial_parameters_by_mean_and_var(
+        i, 0.9) for i in corpus_sizes]
+    prob_vars = bin_prob_vars
+    # prob_vars = exact_prob_vars
+    corpora, ids = create_corpora(ANNOTATION_FILE, prob_vars, min_annotators_per_sentence=min_annotators_per_sentence,
+                                  corpora_basename=corpora_basename, ids_out_file=corpora_ids_filename)
+    # print(corpora[:2])
+    print("wrong number of corrections")
+    print([corpus[:2] for corpus in corpora])
     # print(ranks[0][:2])
     # print([x[:2] for x in create_levelled_files(ranks, 5)])
 
