@@ -1,14 +1,19 @@
 import os
 import sys
+from itertools import repeat
+import multiprocessing
+
 import numpy as np
 import nltk
 from scipy.stats.stats import pearsonr, spearmanr
 import six
+import distance
+POOL_SIZE = multiprocessing.cpu_count()
 
 from utils import *
 sys.path.append(ASSESS_DIR)
 sys.path.append(ASSESS_DIR + '/m2scorer/scripts')
-from assess_learner_language.rank import BLEU_score, gleu_scores
+from assess_learner_language.rank import BLEU_score, gleu_scores, Imeasure_scores
 from create_db import create_ranks, create_corpora, ANNOTATION_FILE
 os.path.join(PROJECT, "data", "all_references.m2")
 
@@ -18,6 +23,17 @@ if not os.path.isdir(SENTENCE_CACHE_DIR):
     os.makedirs(SENTENCE_CACHE_DIR)
 if not os.path.isdir(CORPUS_CACHE_DIR):
     os.makedirs(CORPUS_CACHE_DIR)
+
+SOURCE = "source"
+REF = "ref"
+RAND = "rand"
+
+# measure attributes
+NAME = "name"
+SENTENCE_MEASURE = "sent_measure"
+CORPUS_MEASURE = "corpus_measure"
+CORPUS_SCORER = "corpus_scorer"
+EDIT_BASED = "edit_based"
 
 
 def choose_source_per_chain(ranks, chooser=choose_uniformely):
@@ -67,8 +83,14 @@ def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measu
 def score_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, cache_files=None, force=False):
     if cache_files is None:
         cache_files = [None] * len(corpora)
-    scores = [score_corpus(sources, all_references, corpus, sentence_measure,
-                           corpus_measure, cache_file, force) for corpus, cache_file in zip(corpora, cache_files)]
+    pool = multiprocessing.Pool(POOL_SIZE)
+    scores = pool.starmap(score_corpus, zip(repeat(sources), repeat(all_references), corpora, repeat(sentence_measure),
+                                            repeat(corpus_measure), cache_files, repeat(force)))
+    pool.close()
+    pool.join()
+    # scores = [score_corpus(sources, all_references, corpus, sentence_measure,
+    # corpus_measure, cache_file, force) for corpus, cache_file in
+    # zip(corpora, cache_files)]
     return scores
 
 
@@ -98,7 +120,15 @@ def score(sources, all_references, ranks, sentence_measure, corpus_measure=None,
         except TypeError:
             raise "corpus measure should be None or a function that returns an iterator or an iterable"
     scores = []
+    max_chain_len = 0
+    max_sen_len = 0
     for source, references, chain in zip(sources, all_references, iterate_chains(ranks)):
+        if max_chain_len < len(chain):
+            max_chain_len = len(chain)
+        if max_sen_len < len(chain[0][0]):
+            max_sen_len = len(chain[0][0])
+        print("chain length", len(chain), "max", max_chain_len,
+              "source len", len(chain[0][0]), "max", max_sen_len)
         chain_scores = []
         for sentence in chain:
             if corpus_measure is None:
@@ -119,25 +149,49 @@ def sentence_length(sent):
 
 def ranks_to_scores(ranks):
     scores = []
-    for chain in iterate_chains(ranks):
-        chain_scores = range(len(chain))
-        # make perfect sentences with 0 score
-        chain_scores = reversed(chain_scores)
-        chain_scores = np.fromiter(chain_scores, np.float, len(chain))
-        chain_scores = 1 - (chain_scores / sentence_length(chain[0][0]))
-        scores.append(chain_scores)
+    for sentence_chains in ranks:
+        original_word_count = len(sentence_chains[0][0][0])
+        # original_score is as good as the minimum amount of edis needed to
+        # make it a reference normalized by its length
+        original_score = 1 - min((len(chain)
+                              for chain in sentence_chains)) / original_word_count
+        # ref_score is perfect
+        ref_score = 1
+        for chain in sentence_chains:
+            # score is even steps from original_score to ref_score
+            chain_scores = np.linspace(original_score, ref_score, len(chain))
+            # print(chain)
+            # print("lengths", min((len(tmp_chain)
+            #                   for tmp_chain in sentence_chains)), len(chain))
+            # print("scoring", chain_scores, original_score)
+            # # sentence score is 1 - number of changes from ref/original length
+            # chain_scores = range(len(chain))
+            # chain_scores = reversed(chain_scores)
+            # chain_scores = np.fromiter(chain_scores, np.float, len(chain))
+            # chain_scores = 1 - (chain_scores / sentence_length(chain[0][0]))
+            scores.append(chain_scores)
+        # return
     return scores
 
 
-def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, corpora_names=None, corpora_scores=None, cache=None, force=False):
+def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, choose_corpus_source=lambda x: x[0], corpora_names=None, corpora_scores=None, cache=None, force=False):
     """ runs all assessments on a given measure
     measures comply to the format:
     (name,
     function(source, references,system_sentence):score or None,
-    function(sources,all_references,sentences):score iterable or None))
+    function(sources,all_references,sentences):score iterable or None)
+    function(sources,all_references,sentences):score or None))
+    measures contain:
+    measure name
+    function that returns a score of a sentence or that returns all scores for a list of sentences
+    possibly a function that returns one score for a list of sentences
     ranks - 
     ids - 
+    corpora - list of corpora, whether in text form or in tuples of text and the changes made on it from the original
+    corpus_ids - lines used in all the corpora
     reference_files - 
+    corpora_names - list of names to be appended to the cache filenamename
+    corpora_scores - human score for each corpus
     cache - basename to save caches, None to avoid caching altogether, 
             the basename is changed using the name of the measures, 
             duplicate names should hence be avoided
@@ -148,14 +202,16 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
     sources = choose_source_per_chain(ranks)
     references = extract_references_per_chain(
         ranks, ids, reference_files)
-    print("choosing first corpus as source")
-    corpus_source = corpora[0]
+    corpus_source = choose_corpus_source(corpora)
     corpus_references = extract_references(corpus_ids, reference_files)
-    human_flatten_ranks = list(traverse_chains(ranks_to_scores(ranks)))
+    human_scores = ranks_to_scores(ranks)
+    human_ranks = [np.argsort(x) for x in human_scores]
+    human_flatten_scores = list(traverse_chains(human_scores))
     for measure_details in measures:
-        name = measure_details[0]
-        sentence_measure = measure_details[1]
-        corpus_measure = measure_details[2]
+        name = from_measure(measure_details, NAME)
+        sentence_measure = from_measure(measure_details, SENTENCE_MEASURE)
+        corpus_measure = from_measure(measure_details, CORPUS_MEASURE)
+        corpus_scorer = from_measure(measure_details, CORPUS_MEASURE)
         if cache is not None:
             cache_file = os.path.join(os.path.dirname(
                 cache), name + "_" + os.path.basename(cache))
@@ -174,30 +230,53 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
             else:
                 cache_names = None
         print(name)
-        measure_corpora_scores = score_corpora(
-            corpus_source, corpus_references, corpora, sentence_measure, corpus_measure, cache_names, force)
-        aggregated_corpora_scores = np.mean(measure_corpora_scores, 1)
+        if corpus_scorer is None:
+            measure_corpora_scores = score_corpora(
+                corpus_source, corpus_references, corpora, sentence_measure, corpus_measure, cache_names, force)
+            aggregated_corpora_scores = np.mean(measure_corpora_scores, 1)
+        else:
+            aggregated_corpora_scores = score_corpora(
+                corpus_source, corpus_references, corpora, None, corpus_scorer, cache_names, force)
+            print("aggregated_corpora_scores directly from measure:",
+                  aggregated_corpora_scores)
         measure_score = score(sources, references, ranks,
                               sentence_measure, corpus_measure, cache_file=cache_file, force=force)
+        measure_ranks = [np.argsort(x) for x in measure_score]
         measure_flatten_score = list(traverse_chains(measure_score))
-        assert(len(measure_flatten_score) == len(human_flatten_ranks))
+        assert(len(corpora_scores) == len(aggregated_corpora_scores))
         print("corpus level correlations:")
         pearson = pearsonr(corpora_scores, aggregated_corpora_scores)
         spearman = spearmanr(corpora_scores, aggregated_corpora_scores)
-        print("pearson (val, P-val):", pearson[0], pearson[1])
-        print("spearman (val, P-val):", spearman[0], spearman[1])
+        print("Pearson (val, P-val):", pearson[0], pearson[1])
+        print("Spearman (val, P-val):", spearman[0], spearman[1])
         print("corpus scores for manual analysis, together with their human scores")
         print(np.array(list(zip(corpora_scores, aggregated_corpora_scores))).transpose())
 
+        assert(len(measure_flatten_score) == len(human_flatten_scores))
         print("sentence level correlations:")
-        # print(list(zip(range(2),human_flatten_ranks, measure_score)))
-        pearson = pearsonr(human_flatten_ranks, measure_flatten_score)
-        spearman = spearmanr(human_flatten_ranks, measure_flatten_score)
-        print("pearson (val, P-val):", pearson[0], pearson[1])
-        print("spearman (val, P-val):", spearman[0], spearman[1])
+        pearson = pearsonr(human_flatten_scores, measure_flatten_score)
+        spearman = spearmanr(human_flatten_scores, measure_flatten_score)
+        print("Pearson (val, P-val):", pearson[0], pearson[1])
+        print("Spearman (val, P-val):", spearman[0], spearman[1])
         print("some scores for manual analysis, together with their human ranks")
-        print(np.array(list(zip(human_flatten_ranks, measure_flatten_score)))[
+        print(np.array(list(zip(human_flatten_scores, measure_flatten_score)))[
               :7].transpose())
+
+        print("chain level correlations:")
+        Kendall = kendall_in_parts(human_scores, measure_ranks)
+        print("Kendall's (val, P-val):", Kendall[0], Kendall[1])
+
+
+class Imeasure_callable(object):
+
+    def __init__(self, ref_file, return_per_sent_scores=False, mixmax=100):
+        self.ref_file = ref_file
+        self.return_per_sent_scores = return_per_sent_scores
+        self.mixmax = mixmax
+
+    def __call__(self, sources, references, sentences):
+        Imeasure_scores(sources, self.ref_file, sentences,
+                        return_per_sent_scores=self.return_per_sent_scores, mixmax=self.mixmax, quiet=False)
 
 
 def _glue_wrapper(sources, references, sentences):
@@ -205,16 +284,72 @@ def _glue_wrapper(sources, references, sentences):
     return [float(mean) for mean, std, confidence_interval in res]
 
 
+def _levenshtein_wrapper(source, references, sentence):
+    return _levenshtein_score(source, sentence)
+
+
+def _levenshtein_references_wrapper(source, references, sentence):
+    return max((_levenshtein_score(ref, sentence) for ref in references))
+
+
+def _levenshtein_score(source, sentence):
+    leven = distance.levenshtein(source, sentence)
+    leven = 1 if len(source) == 0 else 1 - leven / len(source)
+    return leven
+
+
+def _bleu_wrapper(source, references, sentence):
+    return BLEU_score(
+        source, references, sentence, 4, nltk.translate.bleu_score.SmoothingFunction().method3, lambda x: x)
+
+
+def _m2_wrapper(source, references, sentence):
+    raise "unimplemented"
+
+
+def shuffle_sources(corpora):
+    corpus = []
+    corpora_num = len(corpora)
+    corpus_len = len(corpora[0])
+    for i in range(corpus_len):
+        corpus.append(corpora[np.random.randint(corpora_num)][i])
+    return corpus
+
+
+def from_measure(measure_details, attribute):
+    if attribute == NAME:
+        return measure_details[0]
+    if attribute == SENTENCE_MEASURE:
+        return measure_details[1]
+    if attribute == CORPUS_MEASURE:
+        return measure_details[2]
+    if attribute == CORPUS_SCORER:
+        return measure_details[3]
+    if attribute == EDIT_BASED:
+        return measure_details[4]
+
+
+def add_measure(measures, name, sentence_measure=None, corpus_measure=None, corpus_scorer=None, edit_based=False):
+    assert not (
+        sentence_measure is None and corpus_measure is None and corpus_scorer is None)
+    measures.append((name, sentence_measure, corpus_measure,
+                     corpus_scorer, edit_based))
+
+
 def main():
+    corpus_source_symb = SOURCE
     bn = os.path.join(REFERENCE_DIR, "BN")
     bn_refs = []
     bn_refs += [bn + str(i) for i in [1, 2, 4, 5, 6, 8, 9, 10]]
     nucleA_ref = bn + "7"
     nucleB_ref = bn + "3"
     nucle_refs = [nucleA_ref, nucleB_ref]
-    reference_files = bn_refs
+    if ANNOTATION_FILE == CONLL_ANNOTATION_FILE:
+        reference_files = bn_refs
+        xml_ref_files = os.path.splitext(BN_ONLY_ANNOTATION_FILE)[0] + ".sgml"
     max_permutations = 1
-    filename = str(max_permutations) + "_" + "rank" + ".json"
+    filename = corpus_source_symb + "_" + \
+        str(max_permutations) + "_" + "rank" + ".json"
 
     # sentence level inits
     ids_filename = os.path.join(SENTENCE_CACHE_DIR,  "id" + filename)
@@ -224,6 +359,13 @@ def main():
     cache_scores = os.path.join(SENTENCE_CACHE_DIR,  "score" + filename)
 
     # corpus level inits
+    if corpus_source_symb == SOURCE:
+        choose_corpus_source = lambda x: x[0]
+    elif corpus_source_symb == REF:
+        choose_corpus_source = lambda x: x[-1]
+    elif corpus_source_symb == RAND:
+        choose_corpus_source = shuffle_sources
+
     corpora_ids_filename = os.path.join(
         CORPUS_CACHE_DIR,  "corora_id" + filename)
     corpora_basename = os.path.join(CORPUS_CACHE_DIR,  "corpus" + filename)
@@ -240,21 +382,24 @@ def main():
         corpora_names = [str(x) for x in prob_vars]
     corpora, corpus_ids = create_corpora(ANNOTATION_FILE, prob_vars,
                                          corpora_basename=corpora_basename, ids_out_file=corpora_ids_filename)
-
     force = True
     force = False
     if force:
         print("Forcing recalculation")
     measures = []
-    # measures format
-    # measures.append((name,
-    #                  function(source, references,system_sentence):score or None,
-    # function(sources,all_references,sentences):score iterable or None)
-    measures.append(("GLEU", None, _glue_wrapper))
-    measures.append(("BLEU", lambda so, r, sy: BLEU_score(
-        so, r, sy, 4, nltk.translate.bleu_score.SmoothingFunction().method3, lambda x: x), None))
+    print("create edits from chosen sources to references heuristically")
+    print("pass a parameter in the measure telling to ")
+    # add_measure(measures, "m2", _m2_wrapper, None, None)
+    add_measure(measures, "BLEU", _bleu_wrapper, None, None)
+    mixmax = 100
+    add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
+                Imeasure_callable(xml_ref_files, True))
+    add_measure(measures, r"LD_{S\rightarrow O}", _levenshtein_wrapper)
+    add_measure(measures, r"MinLD_{O\rightarrow R}",
+                _levenshtein_references_wrapper)
+    add_measure(measures, "GLEU", None, _glue_wrapper, None)
     assess_measures(measures, ranks, ids, corpora, corpus_ids,
-                    reference_files, corpora_names, corpus_mean_corrections, cache_scores, force)
+                    reference_files, choose_corpus_source, corpora_names, corpus_mean_corrections, cache_scores, force)
     # bleu_rank=score(sources, references, ranks, lambda so, r, sy: BLEU_score(
     # so, r, sy, 4, nltk.translate.bleu_score.SmoothingFunction().method3,
     # lambda x: x))
