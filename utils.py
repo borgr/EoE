@@ -4,7 +4,13 @@ import re
 import numpy as np
 import json
 import pickle
-
+import operator
+from functools import reduce
+from collections import Counter
+from math import factorial
+from scipy.stats import norm
+import math
+# from scipy.stats.stats import kendalltau
 PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
 CACHE_DIR = os.path.join(PROJECT, "cache")
 if not os.path.isdir(CACHE_DIR):
@@ -18,11 +24,13 @@ CONLL_ANNOTATION_FILE = os.path.join(
     PROJECT, "conll14st-test-data", "alt", "official-2014.combined-withalt.m2")
 
 BN_ANNOTATION_FILE = os.path.join(REFERENCE_DIR, "BN_corrected.m2")
+BN_ANNOTATION_FILE = os.path.join(REFERENCE_DIR, "BN_using_conll_script.m2")
+BN_ONLY_ANNOTATION_FILE = os.path.join(REFERENCE_DIR, "BNonly.m2")
 
 
-########################################################################################################33
-###                                       File Manipulation
-########################################################################################################33
+##########################################################################
+# File Manipulation
+##########################################################################
 
 def load_object_by_ext(filename):
     ext = os.path.splitext(filename)[1]
@@ -62,12 +70,20 @@ def get_lines_from_file(filename, lines, normalize=lambda x: x):
             text = text[lines]
         return (normalize(line.replace("\n", "")) for line in text)
 
-########################################################################################################33
-###                                       General
-########################################################################################################33
+##########################################################################
+# General
+##########################################################################
+
+
+def list_to_hashable(lst):
+    if type([]) != type(lst):
+        return lst
+    return tuple((list_to_hashable(x) for x in lst))
+
 
 def choose_uniformely(lst):
     return lst[np.random.randint(len(lst))]
+
 
 def binomial_parameters_by_mean_and_var(mean, var):
     if mean == 0:
@@ -77,9 +93,90 @@ def binomial_parameters_by_mean_and_var(mean, var):
     return n, p
 
 
-########################################################################################################33
-###                                       Project DB specific
-########################################################################################################33
+def npermutations(l):
+    num = factorial(len(l))
+    mults = Counter(l).values()
+    den = reduce(operator.mul, (factorial(v) for v in mults), 1)
+    return num / den
+
+
+def ncr(n, r):
+    r = min(r, n - r)
+    if r == 0:
+        return 1
+    numer = reduce(operator.mul, range(n, n - r, -1))
+    denom = reduce(operator.mul, range(1, r + 1))
+    return numer // denom
+
+
+def kendall_mergesort(offs, length, x, y, perm, temp):
+    exchcnt = 0
+    if length == 1:
+        return 0
+    if length == 2:
+        if y[perm[offs]] <= y[perm[offs + 1]]:
+            return 0
+        t = perm[offs]
+        perm[offs] = perm[offs + 1]
+        perm[offs + 1] = t
+        return 1
+    length0 = length // 2
+    length1 = length - length0
+    middle = offs + length0
+    exchcnt += kendall_mergesort(offs, length0, x, y, perm, temp)
+    exchcnt += kendall_mergesort(middle, length1, x, y, perm, temp)
+    if y[perm[middle - 1]] < y[perm[middle]]:
+        return exchcnt
+    # merging
+    i = j = k = 0
+    while j < length0 or k < length1:
+        if k >= length1 or (j < length0 and y[perm[offs + j]] <= y[perm[middle + k]]):
+            temp[i] = perm[offs + j]
+            d = i - j
+            j += 1
+        else:
+            temp[i] = perm[middle + k]
+            d = (offs + i) - (middle + k)
+            k += 1
+        if d > 0:
+            exchcnt += d
+        i += 1
+    perm[offs:offs + length] = temp[0:length]
+    return exchcnt
+
+
+def kendall_in_parts(xs, ys):
+    pairs_num = 0
+    N = 0
+    tmp = len(xs[0]) * (len(xs[0]) - 1) / 2
+    # print(kendalltau(xs[0], ys[0]),
+    #       1 - 2 * (kendall_mergesort(0, len(xs[0]), xs[0], ys[0]) / tmp))
+    exchanges = []
+    for sub_x, sub_y in zip(xs, ys):
+        assert len(sub_x) == len(sub_y)
+        n = len(sub_x)
+        N += n
+        pairs_num += n * (n - 1) / 2
+        temp = list(range(n))
+        # perm = list(range(len(sub_x)))
+        perm = np.lexsort((sub_y, sub_x))
+        # perm.sort(key=lambda a, b: cmp(
+        #     sub_x[a], sub_x[b]) or cmp(sub_y[a], sub_y[b]))
+        exchanges.append(kendall_mergesort(
+            0, len(sub_x), sub_x, sub_y, perm, temp))
+        # assert (abs(kendalltau(sub_x, sub_y)[0] -(1 -
+        #       2 * exchanges[-1] / (n * (n - 1) / 2))) < 0.001)
+    exchanges = sum(exchanges)
+    tau = 1 - 2 * exchanges / pairs_num
+    print("p-val is not accurate, N is too big")
+    z = 3 * (pairs_num - 2 * exchanges) / math.sqrt((2 * N + 5) * pairs_num)
+    p = 2 * norm.cdf(z)
+    return tau, p
+
+##########################################################################
+# Project DB specific
+##########################################################################
+
 
 def apply_changes(sentence, changes):
     changes = sorted(changes, key=lambda x: (int(x[0]), int(x[1])))
