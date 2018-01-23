@@ -124,7 +124,7 @@ def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measu
 
 def score_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, cache_files=None, force=False):
     print("score corpora")
-    if DEBUG
+    if DEBUG:
         all_references = all_references[:2]
     if cache_files is None:
         cache_files = [None] * len(corpora)
@@ -167,6 +167,7 @@ def score_sentences(sources, all_references, ranks, sentence_measure, corpus_mea
     if DEBUG:
         # ranks is shortened by the zip functions below
         sources = sources[:1]
+            # score is even steps from original_score to ref_score
         all_references = all_references[:1]
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
@@ -231,7 +232,6 @@ def ranks_to_scores(ranks):
         # ref_score is perfect
         ref_score = 1
         for chain in sentence_chains:
-            # score is even steps from original_score to ref_score
             chain_scores = np.linspace(original_score, ref_score, len(chain))
 
             # # sentence score is 1 - number of changes from ref/original length
@@ -732,6 +732,10 @@ def main(args, parser):
     assess_measures(measures, ranks, ids, corpora, corpus_ids,
                     reference_files, choose_corpus_source, corpora_names, corpus_mean_corrections, manual_analysis_num, matches_num, cache_scores, force)
 
+def clean_tmp():
+    if DEBUG:
+        assert "tmp" in CACHE_DIR
+        shutil.rmtree('/path/to/your/dir/')
 
 if __name__ == '__main__':
     # Define and parse program input
@@ -752,7 +756,7 @@ if __name__ == '__main__':
                         help="Number of matches and mismatches of each measure with the human ranks to print.", type=int, default=0)
     parser.add_argument("-cache", "--cache_dir",
                         help="Directory to use for caching.", type=str, default=os.path.realpath(CACHE_DIR))
-    parser.add_argument("-pool"
+    parser.add_argument("-pool",
                         help="Pool size, default to the maximum detected.", type=int)
     parser.add_argument("-d", "--debug",
                         help="Debug mode doesn't use or save cache, also it runs only on few sentences.", action="store_true")
@@ -770,7 +774,3 @@ if __name__ == '__main__':
         raise
     finally:
         clean_tmp()
-    def clean_tmp()
-        if DEBUG:
-            assert "tmp" in CACHE_DIR
-            shutil.rmtree('/path/to/your/dir/')
