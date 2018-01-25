@@ -21,7 +21,7 @@ from assess_learner_language.m2scorer import m2scorer
 from assess_learner_language.rank import BLEU_score, SARI_score, SARI_max_score
 from assess_learner_language.rank import sentence_m2, gleu_scores, Imeasure_scores
 from assess_learner_language.rank import grammaticality_score, semantics_score, reference_less_score
-from assess_learner_language.rank import ucca_parse_files, create_one_sentence_files, parse_location
+from assess_learner_language.rank import ucca_parse_sentences, create_one_sentence_files, parse_location
 from assess_learner_language.annalyze_crowdsourcing import convert_correction_to_m2
 from create_db import create_ranks, create_corpora, ANNOTATION_FILE
 from assess_learner_language.errant import parallel_to_m2 as p2m2
@@ -98,9 +98,9 @@ def convert2edits(sources, all_references, cache_file=None):
 
 
 def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measure=None, edit_based=False, cache_file=None, force=False):
-    if DEBUG:
-        sources = sources[:2]
-        corpus = corpus[:2]
+    # if DEBUG:
+    #     sources = sources[:2]
+    #     corpus = corpus[:2]
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
             print("reading measure from cache", cache_file)
@@ -124,8 +124,6 @@ def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measu
 
 def score_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, cache_files=None, force=False):
     print("score corpora")
-    if DEBUG:
-        all_references = all_references[:2]
     if cache_files is None:
         cache_files = [None] * len(corpora)
     pool = multiprocessing.Pool(POOL_SIZE)
@@ -164,11 +162,6 @@ def score_sentences(sources, all_references, ranks, sentence_measure, corpus_mea
     """scores the corpus by the measure of choice. returns the score and the rankings
        measure - a function that gets (source, references_iterable, sentence) and a returns a number
        if a corpus measure is given, all sources\references_iterables\sentences would be passed to it as an iterable instead of being evaluated one by one by sentence_measure."""
-    if DEBUG:
-        # ranks is shortened by the zip functions below
-        sources = sources[:1]
-            # score is even steps from original_score to ref_score
-        all_references = all_references[:1]
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
             print("reading measure from cache", cache_file)
@@ -324,6 +317,13 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
             corpus_source = [source[SENTENCE_LOC] for source in corpus_source]
             save_object_by_ext(corpus_source, corpus_source_file)
     corpus_references = extract_references(corpus_ids, reference_files)
+    if DEBUG:
+        sources = sources[:2]
+        references = references[:2]
+        ranks = ranks[:2]
+        corpus_source = corpus_source[:2]
+        corpus_references = corpus_references[:2]
+        corpora = [x[:2] for x in corpora]
     human_scores = ranks_to_scores(ranks)
     print("Overall corpus statistics:")
     print("Mean human change per type:")
@@ -337,7 +337,6 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         print(error_type, ": ", len(changes), sep="")
     human_ranks = [np.argsort(x) for x in human_scores]
     human_flatten_scores = list(traverse_chains(human_scores))
-
     # check each measure
     for measure_details in measures:
         name = from_measure(measure_details, NAME)
@@ -345,6 +344,8 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         corpus_measure = from_measure(measure_details, CORPUS_MEASURE)
         corpus_scorer = from_measure(measure_details, CORPUS_SCORER)
         edit_based = from_measure(measure_details, EDIT_BASED)
+        print()
+        print(name)
         preprocess_sentence_level_func = from_measure(
             measure_details, PREPROCESS)
         preprocess_corpus_level_func = from_measure(
@@ -354,7 +355,7 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
                 cache), name + "_" + os.path.basename(cache))
             if corpora_names is not None:
                 assert len(corpora_names) == len(
-                    corpora), "each corpus must be named, to name no corpus pass None,\
+                    corpora), "Each corpus must be named, to name no corpus pass None,\
                      to skip caching some of the corpora pass None instead of names in the needed indexes"
                 cache_files = []
                 for corpus_name in corpora_names:
@@ -366,8 +367,6 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
                             corpus_name) + "_corpus_" + name + "_" + os.path.basename(cache)))
             else:
                 cache_files = None
-        print()
-        print(name)
         p_sources, p_references, p_ranks = preprocess_sentence_level_func(
             sources, references, ranks)
         p_corpus_source, p_corpus_references, p_corpora = preprocess_corpus_level_func(
@@ -386,6 +385,9 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         print("corpus level correlations:")
         print_list_statistics(
             aggregated_corpora_scores, corpora_scores, manual_analysis_num)
+        if DEBUG:
+            human_flatten_scores = human_flatten_scores[
+                :len(measure_flatten_score)]
         print()
         print("sentence level correlations:")
         print_list_statistics(measure_flatten_score,
@@ -461,7 +463,7 @@ class CombinedReference_less_callabale(Reference_less_callabale):
         self.gamma = gamma
 
     def __call__(self, source, references, sentence, **kwargs):
-        return reference_less_score(source, sentence, parse_dir, gamma)
+        return reference_less_score(source, sentence, self.cache_folder, self.gamma)
 
 
 class USim_callabale(Reference_less_callabale):
@@ -573,10 +575,9 @@ def parse_Usim_sentence(source, references, ranks, ucca_parse_dir, filename):
     all_sentences = sentence_input_to_sentence_list(
         source, references, ranks)
     all_sentences = list(set(all_sentences))
-    with open(filename, "w") as fl:
-        fl.write("\n".join(all_sentences))
-    ucca_parse_files([filename],
-                     ucca_parse_dir)
+    # with open(filename, "w") as fl:
+    #     fl.write("\n".join(all_sentences))
+    ucca_parse_sentences(all_sentences, ucca_parse_dir)
     return source, references, ranks
 
 
@@ -584,10 +585,9 @@ def parse_Usim_corpora(corpus_source, corpus_references, corpora, ucca_parse_dir
     all_sentences = corpus_input_to_sentence_list(
         corpus_source, corpus_references, corpora)
     all_sentences = list(set(all_sentences))
-    with open(filename, "w") as fl:
-        fl.write("\n".join(all_sentences))
-    ucca_parse_files([filename],
-                     ucca_parse_dir)
+    # with open(filename, "w") as fl:
+    # fl.write("\n".join(all_sentences))
+    ucca_parse_sentences(all_sentences, ucca_parse_dir)
     return corpus_source, corpus_references, corpora
 
 
@@ -595,8 +595,7 @@ def parse_grammatical_sentence(source, references, ranks, one_sentence_dir):
     all_sentences = sentence_input_to_sentence_list(
         source, references, ranks)
     all_sentences = list(set(all_sentences))
-    create_one_sentence_files(all_sentences,
-                              one_sentence_dir)
+    create_one_sentence_files(all_sentences, one_sentence_dir)
     return source, references, ranks
 
 
@@ -604,14 +603,14 @@ def parse_grammatical_corpora(corpus_source, corpus_references, corpora, one_sen
     all_sentences = corpus_input_to_sentence_list(
         corpus_source, corpus_references, corpora)
     all_sentences = list(set(all_sentences))
-    create_one_sentence_files(all_sentences,
-                              one_sentence_dir)
+    create_one_sentence_files(all_sentences, one_sentence_dir)
     return corpus_source, corpus_references, corpora
 
 
 def main(args, parser):
 
-    # initialize local arguments (Note globals are initiated at different scope)
+    # initialize local arguments (Note globals are initiated at different
+    # scope)
     seed = args.random_seed
     corpus_source_symb = args.corpus_source
     max_permutations = args.max_permutations
@@ -705,12 +704,12 @@ def main(args, parser):
     measures = []
     add_measure(measures, r"iBLEU_{\alpha=0.8}", _ibleu_wrapper)
     gamma = 0.1
-    add_measure(measures, "reference_less_{gamma=" + str(gamma) + "}", CombinedReference_less_callabale(
+    add_measure(measures, "Reference_less_{gamma=" + str(gamma) + "}", CombinedReference_less_callabale(
         parse_dir, gamma), preprocess_sentence_level=lambda x, y, z: parse_combined_sentence(x, y, z, parse_dir, sentence_parse_file, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_combined_corpora(x, y, z, parse_dir, sentence_parse_file))
-    add_measure(measures, "grammaticality", Grammaticallity_callabale(
-        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_grammatical_sentence(x, y, z, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_grammatical_corpora(x, y, z, parse_dir))
     add_measure(measures, "USim", USim_callabale(
         parse_dir), preprocess_sentence_level=lambda x, y, z: parse_Usim_sentence(x, y, z, parse_dir, sentence_parse_file), preprocess_corpus_level=lambda x, y, z: parse_Usim_corpora(x, y, z, parse_dir, corpus_parse_file))
+    add_measure(measures, "grammaticality", Grammaticallity_callabale(
+        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_grammatical_sentence(x, y, z, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_grammatical_corpora(x, y, z, parse_dir))
 
     add_measure(measures, "BLEU", _bleu_wrapper)
     add_measure(measures, "M^2", _m2_wrapper, None, None, True)
@@ -732,10 +731,13 @@ def main(args, parser):
     assess_measures(measures, ranks, ids, corpora, corpus_ids,
                     reference_files, choose_corpus_source, corpora_names, corpus_mean_corrections, manual_analysis_num, matches_num, cache_scores, force)
 
+
 def clean_tmp():
     if DEBUG:
+        print("cleaning temporary cache files from", CACHE_DIR)
         assert "tmp" in CACHE_DIR
-        shutil.rmtree('/path/to/your/dir/')
+        if os.path.isdir(CACHE_DIR):
+            shutil.rmtree(CACHE_DIR)
 
 if __name__ == '__main__':
     # Define and parse program input
