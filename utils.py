@@ -10,6 +10,8 @@ from collections import Counter
 from math import factorial
 from scipy.stats import norm
 import math
+import six
+
 # from scipy.stats.stats import kendalltau
 PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
 CACHE_DIR = os.path.join(PROJECT, "cache")
@@ -40,11 +42,11 @@ def load_object_by_ext(filename):
     elif ext in [".pkl", ".pckl", ".pickl", ".pickle"]:
         with open(filename, "rb") as fl:
             return pickle.load(fl)
-    elif ext in [".txt", ".log", ".out", ".crps"]:
+    elif ext in [".txt", ".log", ".out", ".crps", ".m2", ".sgml"]:
         with open(filename, "r") as fl:
             return fl.read()
     else:
-        raise "format not supported" + ext
+        raise Exception("format not supported" + ext)
 
 
 def save_object_by_ext(obj, filename):
@@ -55,11 +57,14 @@ def save_object_by_ext(obj, filename):
     elif ext in [".pkl", ".pckl", ".pickl", ".pickle"]:
         with open(filename, "wb") as fl:
             return pickle.dump(obj, fl)
-    elif ext in [".txt", ".log", ".out", ".crps"]:
+    elif ext in [".txt", ".log", ".out", ".crps", ".m2", ".sgml"]:
         with open(filename, "w") as fl:
-            return fl.write(obj)
+            if isinstance(obj, six.string_types):
+                return fl.write(obj)
+            else:
+                return fl.writelines(obj)
     else:
-        raise "format not supported" + ext
+        raise Exception("format not supported" + ext)
 
 
 def get_lines_from_file(filename, lines, normalize=lambda x: x):
@@ -74,9 +79,9 @@ def get_lines_from_file(filename, lines, normalize=lambda x: x):
 # General
 ##########################################################################
 
-
+list_types = [type([]), type(np.array([]))]
 def list_to_hashable(lst):
-    if type([]) != type(lst):
+    if type(lst) not in list_types:
         return lst
     return tuple((list_to_hashable(x) for x in lst))
 
@@ -143,6 +148,29 @@ def kendall_mergesort(offs, length, x, y, perm, temp):
         i += 1
     perm[offs:offs + length] = temp[0:length]
     return exchcnt
+
+
+def kendall_partial_order_from_seq(xs, ys, sentences):
+    """ calculates tau-a, assumes no ties"""
+    pairs_num = 0
+    nd = 0
+    # tmp = len(xs[0]) * (len(xs[0]) - 1) / 2
+    # print(kendalltau(xs[0], ys[0]),
+    #       1 - 2 * (kendall_mergesort(0, len(xs[0]), xs[0], ys[0]) / tmp))
+    exchanges = []
+    for sub_x, sub_y in zip(xs, ys):
+        last = None
+        for i, (a_i, b_i) in enumerate(zip(sub_x, sub_y)):
+            for a_j, b_j in zip(sub_x[i + 1:], sub_y[i + 1:]):
+                pairs_num += 1
+                a_dir = a_i - a_j > 0
+                b_dir = b_i - b_j > 0
+                if a_dir != b_dir:
+                    nd += 1
+    pairs_num_sqrt = math.sqrt(pairs_num)
+    z = 2 * nd / pairs_num_sqrt - pairs_num_sqrt
+    p = 2 * norm.cdf(z)
+    return 1 - 2 * nd / pairs_num, p
 
 
 def kendall_in_parts(xs, ys):
