@@ -4,6 +4,7 @@ import shutil
 from itertools import repeat
 import multiprocessing
 import argparse
+import time
 from datetime import datetime
 import random
 
@@ -89,7 +90,7 @@ def convert2edits(sources, all_references, cache_file=None):
     res = p2m2.parallel_to_m2(sources, all_references)
     if cache_file is None:
         cache_file = os.path.join(
-            CACHE_DIR, datetime.now().strftime('edits_%Y_%m_%d_%H_%M_%S.m2'))
+            CACHE_DIR, 'edits_' + str(time.time()) + '.m2')  # datetime.now().strftime('edits_%Y_%m_%d_%H_%M_%S.m2'))
     save_object_by_ext(res, cache_file)
     _, res = m2scorer.load_annotation(cache_file)
     os.remove(cache_file)
@@ -103,7 +104,7 @@ def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measu
     #     corpus = corpus[:2]
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
-            print("reading measure from cache", cache_file)
+            # print("reading measure from cache", cache_file)
             return load_object_by_ext(cache_file)
     if not isinstance(corpus[0], six.string_types):
         corpus = [sent[SENTENCE_LOC] for sent in corpus]
@@ -164,7 +165,7 @@ def score_sentences(sources, all_references, ranks, sentence_measure, corpus_mea
        if a corpus measure is given, all sources\references_iterables\sentences would be passed to it as an iterable instead of being evaluated one by one by sentence_measure."""
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
-            print("reading measure from cache", cache_file)
+            # print("reading measure from cache", cache_file)
             return load_object_by_ext(cache_file)
     if edit_based:
         all_references = convert2edits(sources, all_references)
@@ -179,35 +180,41 @@ def score_sentences(sources, all_references, ranks, sentence_measure, corpus_mea
                 sentences.append(sentence[SENTENCE_LOC])
         corpus_references = np.array(corpus_references).transpose()
         print("corpus")
-        scores_it = corpus_measure(
+        scores_nonit = corpus_measure(
             corpus_sources, corpus_references, sentences)
-        # print(scores_it)
         try:
-            scores_it = iter(scores_it)
+            scores_it = iter(scores_nonit)
         except TypeError:
-            print(scores_it)
+            print(scores_nonit)
             raise ValueError(
                 "corpus measure should be None or a function that returns an iterator or an iterable")
-    scores = []
-    max_chain_len = 0
-    max_sen_len = 0
-    for source, references, chain in zip(sources, all_references, iterate_chains(ranks)):
-        if max_chain_len < len(chain):
-            max_chain_len = len(chain)
-        if max_sen_len < len(chain[0][SENTENCE_LOC]):
-            max_sen_len = len(chain[0][SENTENCE_LOC])
-        chain_scores = []
-        for sentence in chain:
-            if corpus_measure is None:
-                score = sentence_measure(
-                    source, references, sentence[SENTENCE_LOC])
-            else:
-                score = next(scores_it)
-            chain_scores.append(score)
-        scores.append(chain_scores)
-    if cache_file is not None:
-        save_object_by_ext(scores, cache_file)
-    return scores
+    try:
+        scores = []
+        max_chain_len = 0
+        max_sen_len = 0
+        for source, references, chain in zip(sources, all_references, iterate_chains(ranks)):
+            if max_chain_len < len(chain):
+                max_chain_len = len(chain)
+            if max_sen_len < len(chain[0][SENTENCE_LOC]):
+                max_sen_len = len(chain[0][SENTENCE_LOC])
+            chain_scores = []
+            for sentence in chain:
+                if corpus_measure is None:
+                    score = sentence_measure(
+                        source, references, sentence[SENTENCE_LOC])
+                else:
+                    score = next(scores_it)
+                chain_scores.append(score)
+            scores.append(chain_scores)
+        if cache_file is not None:
+            save_object_by_ext(scores, cache_file)
+        return scores
+    except:
+        print("scores from corpus measure:")
+        print(scores_nonit)
+        print("len", len(scores_nonit))
+        print("supposed to be len", len(corpus_sources), len(corpus_references), len(sentences))
+        raise
 
 
 def sentence_length(sent):
@@ -279,7 +286,7 @@ def score_changes_per_type(ranks, scores):
     return difs_by_type
 
 
-def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, choose_corpus_source=lambda x: x[SENTENCE_LOC], corpora_names=None, corpora_scores=None, manual_analysis_num=True, matches_num=0, cache=None, force=False):
+def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, choose_source=choose_source_per_chain, choose_corpus_source=lambda x: x[SENTENCE_LOC], corpora_names=None, corpora_scores=None, manual_analysis_num=True, vma=False, matches_num=0, cache=None, force=False):
     """ runs all assessments on a given measure
     measures comply to the format:
     (name,
@@ -304,7 +311,7 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
     """
     if corpora_scores is None:
         corpora_scores = list(range(len(corpora)))
-    sources = choose_source_per_chain(ranks)
+    sources = choose_source(ranks)
     references = extract_references_per_chain(
         ranks, ids, reference_files)
     if cache is not None:
@@ -318,14 +325,15 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
             save_object_by_ext(corpus_source, corpus_source_file)
     corpus_references = extract_references(corpus_ids, reference_files)
     if DEBUG:
-        sources = sources[:2]
-        references = references[:2]
-        ranks = ranks[:2]
-        corpus_source = corpus_source[:2]
-        corpus_references = corpus_references[:2]
-        corpora = [x[:2] for x in corpora]
+        sources = sources[:4]
+        references = references[:4]
+        ranks = ranks[:4]
+        corpus_source = corpus_source[:4]
+        corpus_references = corpus_references[:4]
+        corpora = [x[:4] for x in corpora]
     human_scores = ranks_to_scores(ranks)
     print("Overall corpus statistics:")
+    print("Number of sentences in the corpus:", len(list(traverse_ranks(ranks))))
     print("Mean human change per type:")
     for error_type, changes in score_changes_per_type(ranks, human_scores).items():
         print(error_type, ": ", np.mean(changes), sep="")
@@ -391,7 +399,7 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         print()
         print("sentence level correlations:")
         print_list_statistics(measure_flatten_score,
-                              human_flatten_scores, manual_analysis_num)
+                              human_flatten_scores, manual_analysis_num, vma, sources, references, list(iterate_chains(ranks)))
         if matches_num:
             matches, mismatches = extract_matches(
                 sources, references, ranks, human_scores, measure_score)
@@ -410,19 +418,35 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
             print(error_type, ": ", np.mean(changes), sep="")
 
 
-def print_list_statistics(x, y, manual_analysis_num):
+def print_list_statistics(x, y, manual_analysis_num, vma=False, sources=None, all_references=None, chains=None):
     assert len(x) == len(y), " Lists were expected to be in the same length and not " + \
         str(len(y)) + ", " + str(len(x))
     pearson = pearsonr(y, x)
     print("Pearson (val, P-val):", pearson[0], pearson[1])
-    # spearman = spearmanr(y, x)
-    # print("Spearman (val, P-val):", spearman[0], spearman[1])
+    spearman = spearmanr(y, x)
+    print("Spearman (val, P-val):", spearman[0], spearman[1])
     # kendall = kendalltau(y, x)
     # print("Kendall's Tau (val, P-val):", kendall[0], kendall[1])
     if manual_analysis_num:
-        print("Some scores for manual analysis, together with their corresponding ranks")
-        print(np.array(list(zip(y, x)))[
-              :manual_analysis_num].transpose())
+        if vma and sources is not None and all_references is not None and chains is not None:
+            i = 0
+            print("First sources, references, and sentences given to the measure")
+            for source, references, chain in zip(sources, all_references, chains):
+                print("source, references")
+                print(source, references)
+                print("sentences together with their corresponding ranks")
+                for sentence in chain:
+                    i += 1
+                    if i == manual_analysis_num:
+                        break
+                    print(sentence, x[i], y[i])
+                if i == manual_analysis_num:
+                        break
+        else:
+            print("First", manual_analysis_num,
+                  "scores for manual analysis, together with their corresponding ranks")
+            print(np.array(list(zip(y, x)))[
+                  :manual_analysis_num].transpose())
 
 
 class Imeasure_callable(object):
@@ -612,10 +636,12 @@ def main(args, parser):
     # initialize local arguments (Note globals are initiated at different
     # scope)
     seed = args.random_seed
-    corpus_source_symb = args.corpus_source
+    source_symb = args.source
+    print("Source sentences are chosen to be " + source_symb + " sentences")
     max_permutations = args.max_permutations
     debug = args.debug
     manual_analysis_num = args.manual_analysis
+    vma = args.verbose_manual_analysis
     matches_num = args.matches_num
     force = args.force
     if force:
@@ -624,9 +650,9 @@ def main(args, parser):
     # initialize version control parameters
     random.seed(seed)
     np.random.seed(seed)
-    random_version = "" if corpus_source_symb != RAND else "seed" + str(
+    random_version = "" if source_symb != RAND else "seed" + str(
         seed) + "_"
-    version = corpus_source_symb + "_" + \
+    version = source_symb + "_" + \
         str(max_permutations) + "_" + random_version
     filename = version + "rank"
 
@@ -673,7 +699,7 @@ def main(args, parser):
     corpora_basename = os.path.join(
         corpus_cache_dir,  "corpus" + filename + ".json")
     # create corpus creating functions
-    corpus_mean_corrections = [0, 2, 4, 6, 8, 10]
+    corpus_mean_corrections = np.linspace(0, 10, 11)
     exact_prob_vars = corpus_mean_corrections
     bin_prob_vars = [binomial_parameters_by_mean_and_var(
         i, 0.9) for i in corpus_mean_corrections]
@@ -688,48 +714,53 @@ def main(args, parser):
                                          corpora_basename=corpora_basename, ids_out_file=corpora_ids_filename)
     corpus_parse_file = os.path.join(CACHE_DIR,  "corpus" + filename + ".txt")
     # create corpora source chooser
-    if corpus_source_symb == SOURCE:
-        choose_corpus_source = lambda x: x[0]
-    elif corpus_source_symb == REF:
-        choose_corpus_source = lambda x: x[-1]
-    elif corpus_source_symb == RAND:
+    if source_symb == SOURCE:
+        choose = lambda x: x[0]
+        choose_corpus_source = choose
+        choose_sentence_source = lambda x: choose_source_per_chain(x, choose)
+    elif source_symb == REF:
+        choose = lambda x: x[-1]
+        choose_corpus_source = choose
+        choose_sentence_source = lambda x: choose_source_per_chain(x, choose)
+    elif source_symb == RAND:
         choose_corpus_source = shuffle_sources
+        choose_sentence_source = choose_source_per_chain
     else:
         print("unknown corpus source type")
         parser.print_help()
         parser.exit()
 
-    print(
-        "run all measures (Including combined 0,0.1...1 CombinedReference_less_callabale")
     measures = []
+    # if source_symb == SOURCE and ANNOTATION_FILE == CONLL_ANNOTATION_FILE:
+    #     mixmax = 1
+    #     add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
+    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
+    #     mixmax = 100
+    #     add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
+    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
+    #     add_measure(measures, r"I-measure_nomix", None, Imeasure_callable(xml_ref_files, mix=False),
+    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
+
     add_measure(measures, r"iBLEU_{\alpha=0.8}", _ibleu_wrapper)
+    add_measure(measures, "M^2", _m2_wrapper, None, None, True)
+    add_measure(measures, "USim", USim_callabale(
+        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_Usim_sentence(x, y, z, parse_dir, sentence_parse_file), preprocess_corpus_level=lambda x, y, z: parse_Usim_corpora(x, y, z, parse_dir, corpus_parse_file))
     gamma = 0.1
     add_measure(measures, "Reference_less_{gamma=" + str(gamma) + "}", CombinedReference_less_callabale(
         parse_dir, gamma), preprocess_sentence_level=lambda x, y, z: parse_combined_sentence(x, y, z, parse_dir, sentence_parse_file, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_combined_corpora(x, y, z, parse_dir, sentence_parse_file))
-    add_measure(measures, "USim", USim_callabale(
-        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_Usim_sentence(x, y, z, parse_dir, sentence_parse_file), preprocess_corpus_level=lambda x, y, z: parse_Usim_corpora(x, y, z, parse_dir, corpus_parse_file))
-    add_measure(measures, "grammaticality", Grammaticallity_callabale(
+    add_measure(measures, "Grammaticality", Grammaticallity_callabale(
         parse_dir), preprocess_sentence_level=lambda x, y, z: parse_grammatical_sentence(x, y, z, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_grammatical_corpora(x, y, z, parse_dir))
 
     add_measure(measures, "BLEU", _bleu_wrapper)
-    add_measure(measures, "M^2", _m2_wrapper, None, None, True)
     add_measure(measures, r"LD_{S\rightarrow O}", _levenshtein_wrapper)
     add_measure(measures, r"MinLD_{O\rightarrow R}",
                 _levenshtein_references_wrapper)
     add_measure(measures, "GLEU", None, _glue_wrapper, None)
     add_measure(measures, "MAX_SARI", SARI_max_score)
     add_measure(measures, "SARI", SARI_score)
-    mixmax = 100
-    add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
-                Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
-    mixmax = 1
-    add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
-                Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
-    add_measure(measures, r"I-measure_nomix", None, Imeasure_callable(xml_ref_files, mix=False),
-                Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
 
     assess_measures(measures, ranks, ids, corpora, corpus_ids,
-                    reference_files, choose_corpus_source, corpora_names, corpus_mean_corrections, manual_analysis_num, matches_num, cache_scores, force)
+                    reference_files, choose_sentence_source, choose_corpus_source, corpora_names, corpus_mean_corrections, manual_analysis_num, vma, matches_num, cache_scores, force)
 
 
 def clean_tmp():
@@ -745,14 +776,16 @@ if __name__ == '__main__':
                                      formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-ma", "--manual_analysis",
                         help="Maximum number of scores to print for manual analysis.", type=int, default=7)
+    parser.add_argument("-vma", "--verbose_manual_analysis",
+                        help="Print more for manual analysis.", action="store_true")
     parser.add_argument("-f", "--force",
                         help="Force recalculation, ignore caches even if exists.", action="store_true")
     parser.add_argument("-p", "--max_permutations",
                         help="Maximum permutations of corrections appliance order per source,annotator pair.", type=int, default=1)
-    parser.add_argument("-cs", "--corpus_source", help="Which corpus to choose as the source corpus.\n" +
-                                                       SOURCE + " - NUCLE source corpus \n" +
+    parser.add_argument("-s", "--source", help="Which sentences to choose as the source (in sentence chain or corpus id).\n" +
+                        SOURCE + " - NUCLE source \n" +
                         REF + " - reference sentences\n" + RAND + " - a random choice of a source for each sentence", default=RAND)
-    parser.add_argument("-s", "--random_seed",
+    parser.add_argument("-rs", "--random_seed",
                         help="random_seed.", type=int, default=1)
     parser.add_argument("-mn", "--matches_num",
                         help="Number of matches and mismatches of each measure with the human ranks to print.", type=int, default=0)
@@ -767,6 +800,7 @@ if __name__ == '__main__':
     CACHE_DIR = args.cache_dir
     if args.pool is not None:
         POOL_SIZE = args.pool
+        print("pool size is set to ", POOL_SIZE)
     if args.debug:
         DEBUG = args.debug
         CACHE_DIR = os.path.join(CACHE_DIR, "tmp")
