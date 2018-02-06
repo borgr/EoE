@@ -152,9 +152,7 @@ def create_corpora(m2file, prob_vars, prob=None, num_sampled=1, filter_annot_cha
                 if all_changes == []:
                     break
                 changes = choose_uniformely(all_changes)
-                # print(changes)
                 changes = np.random.permutation(changes).tolist()
-                # print(changes)
                 changes_num = max(int(prob(*vrs)), 0)
                 changes = changes[:changes_num]
                 sentences.append((apply_changes(source, changes), changes))
