@@ -11,6 +11,7 @@ from math import factorial
 from scipy.stats import norm
 import math
 import six
+from itertools import repeat
 
 # from scipy.stats.stats import kendalltau
 PROJECT = os.path.realpath(os.path.dirname(__file__)) + os.sep
@@ -150,27 +151,35 @@ def kendall_mergesort(offs, length, x, y, perm, temp):
     return exchcnt
 
 
-def kendall_partial_order_from_seq(xs, ys, sentences):
+def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
     """ calculates tau-a, assumes no ties"""
-    pairs_num = 0
     nd = 0
-    # tmp = len(xs[0]) * (len(xs[0]) - 1) / 2
-    # print(kendalltau(xs[0], ys[0]),
-    #       1 - 2 * (kendall_mergesort(0, len(xs[0]), xs[0], ys[0]) / tmp))
+    # currently assumes list of ranks instead of many lists which may contain repetitions should use x_ids, y_ids to remove counting pairs that were seen already
     exchanges = []
-    for sub_x, sub_y in zip(xs, ys):
+    pairs = set()
+    sequence_of_lists = True
+    if ids is None:
+        ids = repeat(repeat(None))
+        sequence_of_lists = True
+    for sub_x, sub_y, sub_ids in zip(xs, ys, ids):
         last = None
-        for i, (a_i, b_i) in enumerate(zip(sub_x, sub_y)):
-            for a_j, b_j in zip(sub_x[i + 1:], sub_y[i + 1:]):
-                pairs_num += 1
-                a_dir = a_i - a_j > 0
-                b_dir = b_i - b_j > 0
-                if a_dir != b_dir:
-                    nd += 1
-    pairs_num_sqrt = math.sqrt(pairs_num)
+        for i, (x_i, y_i, i_id) in enumerate(zip(sub_x, sub_y, sub_ids)):
+            half_sub_ids = sub_ids[i + 1:] if not sequence_of_lists else repeat(None)
+            for x_j, y_j, j_id in zip(sub_x[i + 1:], sub_y[i + 1:], half_sub_ids):
+                if sequence_of_lists or (i_id, j_id) not in pairs:
+                    if sequence_of_lists:
+                        pairs.add(len(pairs))
+                    else:
+                        pairs.add((i_id, j_id))
+                    x_dir = x_i - x_j > 0
+                    assert x_i != x_j
+                    y_dir = y_i - y_j > 0
+                    if x_dir != y_dir and y_i != y_j:
+                        nd += 1
+    pairs_num_sqrt = math.sqrt(len(pairs))
     z = 2 * nd / pairs_num_sqrt - pairs_num_sqrt
-    p = 2 * norm.cdf(z)
-    return 1 - 2 * nd / pairs_num, p
+    p = 2 * norm.cdf(-abs(z))
+    return 1 - 2 * nd / len(pairs), p
 
 
 def kendall_in_parts(xs, ys):
@@ -219,8 +228,6 @@ def apply_changes(sentence, changes):
         if start == -1:
             print("noop action, no change applied")
             assert change[2] == NOOP
-            print(changes)
-            raise changes
             return sentence
         res += s[last_end:start] + [change[3]]
         last_end = int(change[1])
