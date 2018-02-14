@@ -5,6 +5,7 @@ import numpy as np
 import json
 import pickle
 import operator
+import hashlib
 from functools import reduce
 from collections import Counter
 from math import factorial
@@ -81,10 +82,18 @@ def get_lines_from_file(filename, lines, normalize=lambda x: x):
 ##########################################################################
 
 list_types = [type([]), type(np.array([]))]
-def list_to_hashable(lst):
+def list_to_hashable(lst, sorting=False):
     if type(lst) not in list_types:
         return lst
+    if sorting:
+        lst.sort()
     return tuple((list_to_hashable(x) for x in lst))
+
+def get_hash(hashable):
+    hasher = hashlib.md5()
+    hasher.update(str(hashable).encode("utf-8"))
+    print("hash", hasher.hexdigest())
+    return hasher.hexdigest()
 
 
 def choose_uniformely(lst):

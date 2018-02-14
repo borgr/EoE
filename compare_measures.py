@@ -3,10 +3,14 @@ import sys
 import shutil
 from itertools import repeat
 import multiprocessing
+import subprocess
+import shlex
 import argparse
 import time
 from datetime import datetime
 import random
+from threading import Lock
+import re
 
 import numpy as np
 import nltk
@@ -28,6 +32,9 @@ from create_db import create_ranks, create_corpora, ANNOTATION_FILE
 from assess_learner_language.errant import parallel_to_m2 as p2m2
 os.path.join(PROJECT, "data", "all_references.m2")
 
+import imeasure.ieval as iev
+
+
 SOURCE = "source"
 REF = "ref"
 RAND = "rand"
@@ -40,9 +47,12 @@ CORPUS_SCORER = "corpus_scorer"
 EDIT_BASED = "edit_based"
 PREPROCESS = "preprocess_func"
 PREPROCESS_CORPUS = "preprocess_corpus_func"
+MULTIPROCESSED = "multiprocessed"
 
 CHANGES_LOC = 1
 SENTENCE_LOC = 0
+
+
 
 
 def choose_source_per_chain(ranks, chooser=choose_uniformely):
@@ -88,6 +98,7 @@ def convert2edits(sources, all_references, cache_file=None):
     #         res += addition
     # sources = [source[0] for source in sources]
     res = p2m2.parallel_to_m2(sources, all_references)
+    res = [r + "\n" if r.startswith("S") else r for r in res]
     if cache_file is None:
         cache_file = os.path.join(
             CACHE_DIR, 'edits_' + str(time.time()) + '.m2')  # datetime.now().strftime('edits_%Y_%m_%d_%H_%M_%S.m2'))
@@ -123,24 +134,28 @@ def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measu
     return scores
 
 
-def score_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, cache_files=None, force=False):
+def score_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, allow_multiprocessing=True, cache_files=None, force=False):
     print("score corpora")
     if cache_files is None:
         cache_files = [None] * len(corpora)
-    pool = multiprocessing.Pool(POOL_SIZE)
-    scores = pool.starmap(score_corpus, zip(repeat(sources), repeat(all_references), corpora, repeat(sentence_measure),
-                                            repeat(corpus_measure), repeat(edit_based), cache_files, repeat(force)))
-    pool.close()
-    pool.join()
+    if allow_multiprocessing:
+        pool = multiprocessing.Pool(POOL_SIZE)
+        scores = pool.starmap(score_corpus, zip(repeat(sources), repeat(all_references), corpora, repeat(sentence_measure),
+                                                repeat(corpus_measure), repeat(edit_based), cache_files, repeat(force)))
+        pool.close()
+        pool.join()
+    else:
+        scores = [score_corpus(*args) for args in zip(repeat(sources), repeat(all_references), corpora, repeat(sentence_measure),
+                                                repeat(corpus_measure), repeat(edit_based), cache_files, repeat(force))]
     # scores = [score_corpus(sources, all_references, corpus, sentence_measure,
     # corpus_measure, cache_file, force) for corpus, cache_file in
     # zip(corpora, cache_files)]
     return scores
 
 
-def measure_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, cache_files=None, corpora_scores=None, force=False):
+def measure_corpora(sources, all_references, corpora, sentence_measure, corpus_measure=None, edit_based=False, allow_multiprocessing=True, cache_files=None, corpora_scores=None, force=False):
     aggregated_corpora_scores = score_corpora(
-        sources, all_references, corpora, None, corpus_measure, edit_based, cache_files, force)
+        sources, all_references, corpora, None, corpus_measure, edit_based, allow_multiprocessing, cache_files, force)
     aggregated_corpora_scores = np.squeeze(aggregated_corpora_scores)
     if corpora_scores is None:
         return aggregated_corpora_scores
@@ -213,7 +228,8 @@ def score_sentences(sources, all_references, ranks, sentence_measure, corpus_mea
         print("scores from corpus measure:")
         print(scores_nonit)
         print("len", len(scores_nonit))
-        print("supposed to be len", len(corpus_sources), len(corpus_references), len(sentences))
+        print("supposed to be len", len(corpus_sources),
+              len(corpus_references), len(sentences))
         raise
 
 
@@ -333,7 +349,8 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         corpora = [x[:4] for x in corpora]
     human_scores = ranks_to_scores(ranks)
     print("Overall corpus statistics:")
-    print("Number of sentences in the corpus:", len(list(traverse_ranks(ranks))))
+    print("Number of sentences in the corpus:",
+          len(list(traverse_ranks(ranks))))
     print("Mean human change per type:")
     for error_type, changes in score_changes_per_type(ranks, human_scores).items():
         print(error_type, ": ", np.mean(changes), sep="")
@@ -352,6 +369,7 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
         corpus_measure = from_measure(measure_details, CORPUS_MEASURE)
         corpus_scorer = from_measure(measure_details, CORPUS_SCORER)
         edit_based = from_measure(measure_details, EDIT_BASED)
+        allow_multiprocessing = not from_measure(measure_details, MULTIPROCESSED)
         print()
         print(name)
         preprocess_sentence_level_func = from_measure(
@@ -383,11 +401,11 @@ def assess_measures(measures, ranks, ids, corpora, corpus_ids, reference_files, 
                                         sentence_measure, corpus_measure, edit_based, cache_file=cache_file, force=force)
         if corpus_scorer is None:
             measure_corpora_scores = score_corpora(
-                p_corpus_source, p_corpus_references, p_corpora, sentence_measure, corpus_measure, edit_based, cache_files, force)
+                p_corpus_source, p_corpus_references, p_corpora, sentence_measure, corpus_measure, edit_based, allow_multiprocessing, cache_files, force)
             aggregated_corpora_scores = np.mean(measure_corpora_scores, 1)
         else:
             aggregated_corpora_scores = measure_corpora(
-                p_corpus_source, p_corpus_references, p_corpora, None, corpus_scorer, edit_based, cache_files, corpora_scores, force)
+                p_corpus_source, p_corpus_references, p_corpora, None, corpus_scorer, edit_based, allow_multiprocessing, cache_files, corpora_scores, force)
         measure_ranks = [np.argsort(x) for x in measure_score]
         measure_flatten_score = list(traverse_chains(measure_score))
         print("corpus level correlations:")
@@ -441,35 +459,249 @@ def print_list_statistics(x, y, manual_analysis_num, vma=False, sources=None, al
                         break
                     print(sentence, x[i], y[i])
                 if i == manual_analysis_num:
-                        break
+                    break
         else:
             print("First", manual_analysis_num,
                   "scores for manual analysis, together with their corresponding ranks")
             print(np.array(list(zip(y, x)))[
                   :manual_analysis_num].transpose())
 
+class Imeasure_num_callable(object):
+    calls = 0
+    ref_files = {}
+    cache_dir = os.path.join(CACHE_DIR, "im")
+    if not os.path.isdir(cache_dir):
+        os.makedirs(cache_dir)
+    mutex = Lock()
+    score_cache_file = os.path.join(cache_dir, "scores.pkl")
+    if os.path.isfile(score_cache_file):
+        score_cache = load_object_by_ext(score_cache_file)
+    else:
+        score_cache = {}
 
-class Imeasure_callable(object):
-
-    def __init__(self, ref_file, return_per_sent_scores=True, mixmax=100, **kwargs):
-        self.ref_file = ref_file
+    def __init__(self, return_per_sent_scores=True, mixmax=100, cache_file=None, **kwargs):
         self.return_per_sent_scores = return_per_sent_scores
         self.mixmax = mixmax
         self.bound_args = kwargs
 
+    def get_key(source, sentence):
+        return (source, sentence)
+
+    def add_to_cache(source, sentence, score):
+        Imeasure_num_callable.mutex.acquire()
+        Imeasure_num_callable.score_cache[
+            Imeasure_num_callable.get_key(source, sentence)] = score
+        if len(Imeasure_num_callable.score_cache) % 100 == 0:
+            print("Imeasure cache size", len(Imeasure_num_callable.score_cache))
+            Imeasure_num_callable.score_cache = load_object_by_ext(
+                Imeasure_num_callable.score_cache_file)
+        Imeasure_num_callable.mutex.release()
+
+    def get_from_cache(source, sentence):
+        return Imeasure_num_callable.score_cache[Imeasure_num_callable.get_key(source, sentence)]
+
+    def in_cache(source, sentence):
+        return Imeasure_num_callable.get_key(source, sentence) in Imeasure_num_callable.score_cache
+
+    def split_xml(xml, write=True):
+        begining = """<?xml version='1.0' encoding='UTF-8'?>\n<scripts><script id="1">"""
+        ending = "</script></scripts>"
+        with open(xml) as fl:
+            content = fl.read()
+        sentences = re.findall("<sentence.*?ntence>", content)
+        contents = [begining + sentence + ending for sentence in sentences]
+        if not write:
+            return contents
+        xmls = []
+        xml_dir = os.path.splitext(xml)[0]
+        if not os.path.isdir(xml_dir):
+            try:
+                os.makedirs(xml_dir)
+            except FileExistsError:
+                pass
+        for i, content in enumerate(contents):
+            xml_file = os.path.join(xml_dir, str(i) + os.path.splitext(xml)[1])
+            xmls.append(xml_file)
+            with open(xml_file, "w") as fl:
+                fl.write(content)
+        return xmls
+
+    def get_xml(sources, references):
+        if len(sources) != len(references):
+            references = np.array(references).transpose()
+        to_hash = (tuple(list_to_hashable(sources, True)), tuple(list_to_hashable(references,True)))
+        hash_key = get_hash(to_hash)
+        if hash_key in Imeasure_num_callable.ref_files:
+            return Imeasure_num_callable.ref_files[hash_key]
+
+        res = p2m2.parallel_to_m2(sources, references)
+        res = [r + "\n" if r.startswith("S") else r for r in res]
+        cache_file = os.path.join(
+            Imeasure_num_callable.cache_dir, 'edits_' + str(time.time()) + '.m2')  # datetime.now().strftime('edits_%Y_%m_%d_%H_%M_%S.m2'))
+        save_object_by_ext(res, cache_file)
+        xml_file = os.path.join(
+            Imeasure_num_callable.cache_dir, "im_" + hash_key + ".xml")
+        if not os.path.isfile(xml_file):
+            command = ASSESS_DIR + os.sep + "m2_to_ixml.sh -in:" + cache_file + \
+                " -out:" + xml_file
+            print("command", command)
+            p = subprocess.Popen(shlex.split(command))
+            p.communicate()
+        Imeasure_num_callable.ref_files[hash_key] = xml_file
+        os.remove(cache_file)
+        return xml_file
+
+    def Imeasure_num_scores(source, file_ref, system, **kwargs):
+        """ If per_sentence_score is False, one accumulated score is returned instead of a score for each sentence"""
+        file_hyp = None
+        if isinstance(system, six.string_types):
+            file_hyp = system
+            system = None
+        return iev.count_clusters(file_ref, file_hyp=file_hyp, hyps=system, **kwargs)
+
+    def ieval(self, source, ref_file, sentence, mixmax, quiet=True, **kwargs):
+        # We do not lock here, a sentence might sometimes be calculated twice,
+        # in which case the last calculation will be cached
+        if Imeasure_num_callable.in_cache(source, sentence):
+            return Imeasure_num_callable.get_from_cache(source, sentence)
+        res = Imeasure_num_callable.Imeasure_num_scores([source], ref_file, [sentence],
+                              return_counts=True, mixmax=self.mixmax, quiet=quiet, **self.bound_args, **kwargs)
+        return res
+
+    def __call__(self, sources, references, sentences, **kwargs):
+        files = Imeasure_num_callable.split_xml(Imeasure_num_callable.get_xml(sources, references))
+
+        pool = multiprocessing.Pool(POOL_SIZE)
+        scores = pool.starmap(self.ieval, zip(sources, files, sentences,
+                                              repeat(self.mixmax)))
+        pool.close()
+        pool.join()
+        print("scores", scores)
+        scores = [score[0] for score in scores]
+        print("Candidates nums", scores)
+        return scores
+
+class Imeasure_callable(object):
+    calls = 0
+    ref_files = {}
+    cache_dir = os.path.join(CACHE_DIR, "im")
+    if not os.path.isdir(cache_dir):
+        os.makedirs(cache_dir)
+    mutex = Lock()
+    score_cache_file = os.path.join(cache_dir, "scores.pkl")
+    if os.path.isfile(score_cache_file):
+        score_cache = load_object_by_ext(score_cache_file)
+    else:
+        score_cache = {}
+
+    def __init__(self, return_per_sent_scores=True, mixmax=100, cache_file=None, **kwargs):
+        self.return_per_sent_scores = return_per_sent_scores
+        self.mixmax = mixmax
+        self.bound_args = kwargs
+
+    def get_key(source, sentence):
+        return (source, sentence)
+
+    def add_to_cache(source, sentence, score):
+        Imeasure_callable.mutex.acquire()
+        Imeasure_callable.score_cache[
+            Imeasure_callable.get_key(source, sentence)] = score
+        if len(Imeasure_callable.score_cache) % 100 == 0:
+            print("Imeasure cache size", len(Imeasure_callable.score_cache))
+            save_object_by_ext(Imeasure_callable.score_cache, Imeasure_callable.score_cache_file)
+        Imeasure_callable.mutex.release()
+
+    def get_from_cache(source, sentence):
+        return Imeasure_callable.score_cache[Imeasure_callable.get_key(source, sentence)]
+
+    def in_cache(source, sentence):
+        return Imeasure_callable.get_key(source, sentence) in Imeasure_callable.score_cache
+
+    def split_xml(xml, write=True):
+        begining = """<?xml version='1.0' encoding='UTF-8'?>\n<scripts><script id="1">"""
+        ending = "</script></scripts>"
+        with open(xml) as fl:
+            content = fl.read()
+        sentences = re.findall("<sentence.*?ntence>", content)
+        contents = [begining + sentence + ending for sentence in sentences]
+        if not write:
+            return contents
+        xmls = []
+        xml_dir = os.path.splitext(xml)[0]
+        if not os.path.isdir(xml_dir):
+            try:
+                os.makedirs(xml_dir)
+            except FileExistsError:
+                pass
+        for i, content in enumerate(contents):
+            xml_file = os.path.join(xml_dir, str(i) + os.path.splitext(xml)[1])
+            xmls.append(xml_file)
+            with open(xml_file, "w") as fl:
+                fl.write(content)
+        return xmls
+
+    def get_xml(sources, references):
+        if len(sources) != len(references):
+            references = np.array(references).transpose()
+        to_hash = (tuple(sorted(list_to_hashable(sources))), tuple(sorted(list_to_hashable(references))))
+        hash_key = get_hash(to_hash)
+        if hash_key in Imeasure_callable.ref_files:
+            return Imeasure_callable.ref_files[hash_key]
+
+        res = p2m2.parallel_to_m2(sources, references)
+        res = [r + "\n" if r.startswith("S") else r for r in res]
+        cache_file = os.path.join(
+            Imeasure_callable.cache_dir, 'edits_' + str(time.time()) + '.m2')  # datetime.now().strftime('edits_%Y_%m_%d_%H_%M_%S.m2'))
+        save_object_by_ext(res, cache_file)
+        xml_file = os.path.join(
+            Imeasure_callable.cache_dir, "im_" + hash_key + ".xml")
+        if not os.path.isfile(xml_file):
+            command = ASSESS_DIR + os.sep + "m2_to_ixml.sh -in:" + cache_file + \
+                " -out:" + xml_file
+            print("command", command)
+            p = subprocess.Popen(shlex.split(command))
+            p.communicate()
+        Imeasure_callable.ref_files[hash_key] = xml_file
+        os.remove(cache_file)
+        return xml_file
+
     def get_score(self, imeasore_score):
         return imeasore_score["c"]["wacc"] * 100
 
-    def __call__(self, sources, references, sentences, **kwargs):
-        res = Imeasure_scores(sources, self.ref_file, sentences,
-                              return_per_sent_scores=self.return_per_sent_scores, mixmax=self.mixmax, quiet=False, **self.bound_args, **kwargs)
-        if self.return_per_sent_scores:
-            res = res[1]
-            res = [self.get_score(r) for r in res]
-        else:
-            res = self.get_score(res)
+    def ieval(self, source, ref_file, sentence, mixmax, quiet=True, **kwargs):
+        # We do not lock here, a sentence might sometimes be calculated twice,
+        # in which case the last calculation will be cached
+        if Imeasure_callable.in_cache(source, sentence):
+            return Imeasure_callable.get_from_cache(source, sentence)
+        res = Imeasure_scores([source], ref_file, [sentence],
+                              return_counts=True, mixmax=self.mixmax, quiet=quiet, **self.bound_args, **kwargs)
+        Imeasure_callable.add_to_cache(source, sentence, res)
         return res
 
+    def __call__(self, sources, references, sentences, **kwargs):
+        files = Imeasure_callable.split_xml(Imeasure_callable.get_xml(sources, references))
+
+        pool = multiprocessing.Pool(POOL_SIZE)
+        scores = pool.starmap(self.ieval, zip(sources, files, sentences,
+                                              repeat(self.mixmax)))
+        pool.close()
+        pool.join()
+        if self.return_per_sent_scores:
+            res = [iev.compute_all(sys, base) for sys, base in scores]
+            res = [self.get_score(r) for r in res]
+        else:
+            print(scores)
+            # res = None
+            # for x, y in zip(*scores):
+            #     if res is None:
+            #         res = [x,y]
+            #     else:
+            #         res = []
+            res = reduce(lambda x, y:(iev.add_counter_counter(x[0], y[0]), iev.add_counter_counter(x[1], y[1])), zip(*scores))
+            assert len(res) == 2
+            res = iev.compute_all(res[0], res[1])
+            res = self.get_score(res)
+        return res
 
 class Reference_less_callabale(object):
 
@@ -560,13 +792,15 @@ def from_measure(measure_details, attribute):
         return measure_details[5]
     if attribute == PREPROCESS_CORPUS:
         return measure_details[6]
+    if attribute == MULTIPROCESSED:
+        return measure_details[7]
 
 
-def add_measure(measures, name, sentence_measure=None, corpus_measure=None, corpus_scorer=None, edit_based=False, preprocess_sentence_level=lambda x, y, z: (x, y, z), preprocess_corpus_level=lambda x, y, z: (x, y, z)):
+def add_measure(measures, name, sentence_measure=None, corpus_measure=None, corpus_scorer=None, edit_based=False, preprocess_sentence_level=lambda x, y, z: (x, y, z), preprocess_corpus_level=lambda x, y, z: (x, y, z), multiprocessed=False):
     assert not (
         sentence_measure is None and corpus_measure is None and corpus_scorer is None)
     measures.append((name, sentence_measure, corpus_measure,
-                     corpus_scorer, edit_based, preprocess_sentence_level, preprocess_corpus_level))
+                     corpus_scorer, edit_based, preprocess_sentence_level, preprocess_corpus_level, multiprocessed))
 
 
 def sentence_input_to_sentence_list(source, references, ranks):
@@ -732,32 +966,35 @@ def main(args, parser):
 
     measures = []
     # if source_symb == SOURCE and ANNOTATION_FILE == CONLL_ANNOTATION_FILE:
-    #     mixmax = 1
-    #     add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
-    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
-    #     mixmax = 100
-    #     add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(xml_ref_files, mixmax=mixmax),
-    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
-    #     add_measure(measures, r"I-measure_nomix", None, Imeasure_callable(xml_ref_files, mix=False),
-    #                 Imeasure_callable(xml_ref_files, return_per_sent_scores=False))
+    add_measure(measures, r"imeasure ref num", None, Imeasure_num_callable(),
+                Imeasure_num_callable(return_per_sent_scores=False), multiprocessed=True)
 
-    add_measure(measures, r"iBLEU_{\alpha=0.8}", _ibleu_wrapper)
-    add_measure(measures, "M^2", _m2_wrapper, None, None, True)
-    add_measure(measures, "USim", USim_callabale(
-        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_Usim_sentence(x, y, z, parse_dir, sentence_parse_file), preprocess_corpus_level=lambda x, y, z: parse_Usim_corpora(x, y, z, parse_dir, corpus_parse_file))
-    gamma = 0.1
-    add_measure(measures, "Reference_less_{gamma=" + str(gamma) + "}", CombinedReference_less_callabale(
-        parse_dir, gamma), preprocess_sentence_level=lambda x, y, z: parse_combined_sentence(x, y, z, parse_dir, sentence_parse_file, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_combined_corpora(x, y, z, parse_dir, sentence_parse_file))
-    add_measure(measures, "Grammaticality", Grammaticallity_callabale(
-        parse_dir), preprocess_sentence_level=lambda x, y, z: parse_grammatical_sentence(x, y, z, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_grammatical_corpora(x, y, z, parse_dir))
+    # add_measure(measures, r"I-measure_nomix", None, Imeasure_callable(mix=False),
+    #             Imeasure_callable(return_per_sent_scores=False, mix=False), multiprocessed=True)
 
-    add_measure(measures, "BLEU", _bleu_wrapper)
-    add_measure(measures, r"LD_{S\rightarrow O}", _levenshtein_wrapper)
-    add_measure(measures, r"MinLD_{O\rightarrow R}",
-                _levenshtein_references_wrapper)
-    add_measure(measures, "GLEU", None, _glue_wrapper, None)
-    add_measure(measures, "MAX_SARI", SARI_max_score)
-    add_measure(measures, "SARI", SARI_score)
+    # add_measure(measures, r"iBLEU_{\alpha=0.8}", _ibleu_wrapper)
+    # add_measure(measures, "M^2", _m2_wrapper, None, None, True)
+    # add_measure(measures, "USim", USim_callabale(
+    #     parse_dir), preprocess_sentence_level=lambda x, y, z: parse_Usim_sentence(x, y, z, parse_dir, sentence_parse_file), preprocess_corpus_level=lambda x, y, z: parse_Usim_corpora(x, y, z, parse_dir, corpus_parse_file))
+    # gamma = 0.1
+    # add_measure(measures, "Reference_less_{gamma=" + str(gamma) + "}", CombinedReference_less_callabale(
+    #     parse_dir, gamma), preprocess_sentence_level=lambda x, y, z: parse_combined_sentence(x, y, z, parse_dir, sentence_parse_file, parse_dir), preprocess_corpus_level=lambda x, y, z: parse_combined_corpora(x, y, z, parse_dir, sentence_parse_file))
+    # add_measure(measures, "Grammaticality", Grammaticallity_callabale(
+    # parse_dir), preprocess_sentence_level=lambda x, y, z:
+    # parse_grammatical_sentence(x, y, z, parse_dir),
+    # preprocess_corpus_level=lambda x, y, z: parse_grammatical_corpora(x, y,
+    # z, parse_dir))
+
+    # add_measure(measures, "BLEU", _bleu_wrapper)
+    # add_measure(measures, r"LD_{S\rightarrow O}", _levenshtein_wrapper)
+    # add_measure(measures, r"MinLD_{O\rightarrow R}",
+    #             _levenshtein_references_wrapper)
+    # add_measure(measures, "GLEU", None, _glue_wrapper, None)
+    # add_measure(measures, "MAX_SARI", SARI_max_score)
+    # add_measure(measures, "SARI", SARI_score)
+    # mixmax = 100
+    # add_measure(measures, r"I-measure_{" + str(mixmax) + "mixmax}", None, Imeasure_callable(mixmax=mixmax),
+    #             Imeasure_callable(return_per_sent_scores=False, mixmax=mixmax))
 
     assess_measures(measures, ranks, ids, corpora, corpus_ids,
                     reference_files, choose_sentence_source, choose_corpus_source, corpora_names, corpus_mean_corrections, manual_analysis_num, vma, matches_num, cache_scores, force)

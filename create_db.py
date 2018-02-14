@@ -129,7 +129,8 @@ def create_corpora(m2file, prob_vars, prob=None, num_sampled=1, filter_annot_cha
             repr_vars = ",".join([str(var) for var in vrs]) + "_"
             filename = os.path.join(root, repr_vars + basename)
             filenames.append(filename)
-        if os.path.isfile(corpora_basename) and os.path.isfile(ids_out_file):
+
+        if all([os.path.isfile(filename) for filename in filenames]) and os.path.isfile(ids_out_file):
             print("reading corpora from file")
             corpora = [load_object_by_ext(filename) for filename in filenames]
             return corpora, load_object_by_ext(ids_out_file)
