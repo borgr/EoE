@@ -22,7 +22,7 @@ corpus_candidates_nums = [2, 3, 5, 768, 2016, 896, 112, 43200, 224, 336, 105, 12
 
 
 BLEU, iBLEU = "BLEU", "iBLEU"
-R_LEV, LEV = r"LD_{$S\rightarrowO$}", r"MinLD_{$O\rightarrowR$}"
+R_LEV, LEV = r"$LD_{S\rightarrow O}$", r"$MinLD_{O\rightarrow R}$"
 M2, GLEU, IMEASURE, SARI, MAX_SARI, GRAMMAR, UCCA_SIM = "M^2", "GLEU", "I-measure", "SARI", "MAX_SARI", "LT", "USim"
 HUMAN = "Human judgment correlations"
 MAEGE = "MAEGE correlations"
