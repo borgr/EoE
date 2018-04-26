@@ -50,6 +50,8 @@ def create_ranks(m2file, max_permutations=100000, filter_annot_changes=lambda x:
     sentence_ids = []
     for sentence_id, (source, all_changes) in enumerate(db):
         sentence_chains = []
+        if len(source) > 300 and source.count(".") > 1:
+            continue
         if min_annotators_per_sentence > len(all_changes):
             continue
         if ignore_noop:
@@ -62,28 +64,31 @@ def create_ranks(m2file, max_permutations=100000, filter_annot_changes=lambda x:
                 cur_changes = min(max_changes, len(annot_changes))
             else:
                 cur_changes = len(annot_changes)
-            permutations_num = int(npermutations(list_to_hashable(annot_changes[:cur_changes])) * ncr(len(annot_changes), cur_changes))
+            permutations_num = int(npermutations(list_to_hashable(
+                annot_changes[:cur_changes])) * ncr(len(annot_changes), cur_changes))
             # if duplicate changes are possible in some future version use the following line instead of the one after (error might occur in subsetting annot_changes[:cur_changes])
-            # if permutations_num < max_permutations and sum((1 for i, perm in zip(range(max_permutations + 1), itertools.permutations(annot_changes, max_changes)))) > max_permutations:
+            # if permutations_num < max_permutations and sum((1 for i, perm in
+            # zip(range(max_permutations + 1),
+            # itertools.permutations(annot_changes, max_changes)))) >
+            # max_permutations:
             if permutations_num < max_permutations:
                 gen = itertools.permutations(annot_changes, max_changes)
             else:
-                gen = (random.sample(annot_changes, cur_changes) for i in range(max_permutations)) # there exists a small chance of repeating chains
+                gen = (random.sample(annot_changes, cur_changes) for i in range(
+                    max_permutations))  # there exists a small chance of repeating chains
             for changes in gen:
                 rank = []
                 for i in range(len(annot_changes) + 1):
                     rank.append(
                         (apply_changes(source, changes[:i]), changes[:i]))
                     total_sentences += 1
-                    # if total_sentences % 1000 == 0:
-                    #     print ("created a total of", total_sentences, "sentences")
                 sentence_chains.append(rank)
-            # print("chain")
         if len(sentence_chains) > 1:
             sentence_ids.append(sentence_id)
             ranks.append(sentence_chains)
             if len(ranks) % 10 == 0:
                 print("calculated for", len(ranks), "source sentences")
+
     print("Created", total_sentences, "sentences based on", len(ranks),
           "eligible sentences and a total of", total_annotations, "annotations.")
     if ids_out_file is not None:
@@ -109,7 +114,10 @@ def create_levelled_files(ranks, file_num):
 
 
 def create_corpora(m2file, prob_vars, prob=None, num_sampled=1, filter_annot_changes=lambda x: True, min_annotators_per_sentence=0, ignore_noop=True, max_changes=None, corpora_basename=None, ids_out_file=None, force=False):
-
+    """ samples corpora from the data, with amount of corrections sampled by the given probabilites to correct
+    m2file - a file with sentences and edits
+    prob_vars - an iterable of probability hyperparameters
+    prob - the probability to sample from, if not specified a binomial distribution would be chosen, if no variance is given, each sentence would be corrected exactly the given number of times (if possible)"""
     prob_vars = np.array(prob_vars)
     if len(prob_vars.shape) == 1:
         prob_vars = np.expand_dims(prob_vars, axis=1)
@@ -190,14 +198,10 @@ def main():
     bin_prob_vars = [binomial_parameters_by_mean_and_var(
         i, 0.9) for i in corpus_sizes]
     prob_vars = bin_prob_vars
-    # prob_vars = exact_prob_vars
     corpora, ids = create_corpora(ANNOTATION_FILE, prob_vars, min_annotators_per_sentence=min_annotators_per_sentence,
                                   corpora_basename=corpora_basename, ids_out_file=corpora_ids_filename, force=force)
-    # print(corpora[:2])
     print("wrong number of corrections")
     print([corpus[:2] for corpus in corpora])
-    # print(ranks[0][:2])
-    # print([x[:2] for x in create_levelled_files(ranks, 5)])
 
 
 if __name__ == '__main__':
