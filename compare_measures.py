@@ -34,7 +34,7 @@ os.path.join(PROJECT, "data", "all_references.m2")
 
 import imeasure.ieval as iev
 
-UCCA_MODEL_PATH = "/cs/labs/oabend/borgr/tupa/models/bilstm"
+UCCA_MODEL_PATH = "/hard/coded/path/models/bilstm"
 
 SOURCE = "source"
 REF = "ref"
