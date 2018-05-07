@@ -90,17 +90,6 @@ def convert2edits(sources, all_references, cache_file=None, return_filename=Fals
         return _convert2edits_cache[hash_key]
     if os.path.isfile(cache_file):
         return load_object_by_ext(cache_file)
-    # res = []
-    # for source, references in zip(sources, all_references):
-    #     source = source[0]
-    #     res.append("S " + source + "\n")
-    #     for i, reference in enumerate(references):
-    #         addition = convert_correction_to_m2(source, reference, i)
-    #         if not addition:
-    #             addition = [
-    #                 "A -1 -1|||noop|||-NONE-|||REQUIRED|||-NONE-|||" + str(i) + "\n"]
-    #         res += addition
-    # sources = [source[0] for source in sources]
     res = p2m2.parallel_to_m2(sources, all_references)
     res = [r + "\n" if r.startswith("S") else r for r in res]
     save_object_by_ext(res, cache_file)
@@ -112,9 +101,6 @@ def convert2edits(sources, all_references, cache_file=None, return_filename=Fals
 
 
 def score_corpus(sources, all_references, corpus, sentence_measure, corpus_measure=None, edit_based=False, cache_file=None, force=False):
-    # if DEBUG:
-    #     sources = sources[:2]
-    #     corpus = corpus[:2]
     if not force and cache_file is not None:
         if os.path.isfile(cache_file):
             # print("reading measure from cache", cache_file)
@@ -149,9 +135,6 @@ def score_corpora(sources, all_references, corpora, sentence_measure, corpus_mea
     else:
         scores = [score_corpus(*args) for args in zip(repeat(sources), repeat(all_references), corpora, repeat(sentence_measure),
                                                       repeat(corpus_measure), repeat(edit_based), cache_files, repeat(force))]
-    # scores = [score_corpus(sources, all_references, corpus, sentence_measure,
-    # corpus_measure, cache_file, force) for corpus, cache_file in
-    # zip(corpora, cache_files)]
     return scores
 
 
@@ -251,12 +234,6 @@ def ranks_to_scores(ranks):
         ref_score = 1
         for chain in sentence_chains:
             chain_scores = np.linspace(original_score, ref_score, len(chain))
-
-            # # sentence score is 1 - number of changes from ref/original length
-            # chain_scores = range(len(chain))
-            # chain_scores = reversed(chain_scores)
-            # chain_scores = np.fromiter(chain_scores, np.float, len(chain))
-            # chain_scores = 1 - (chain_scores / sentence_length(chain[0][0]))
             scores.append(chain_scores)
     return scores
 
@@ -546,8 +523,6 @@ def parse_Usim_sentence(source, references, ranks, ucca_parse_dir, filename):
     all_sentences = sentence_input_to_sentence_list(
         source, references, ranks)
     all_sentences = list(set(all_sentences))
-    # with open(filename, "w") as fl:
-    #     fl.write("\n".join(all_sentences))
     ucca_parse_sentences(all_sentences, ucca_parse_dir, UCCA_MODEL_PATH)
     return source, references, ranks
 
@@ -556,8 +531,6 @@ def parse_Usim_corpora(corpus_source, corpus_references, corpora, ucca_parse_dir
     all_sentences = corpus_input_to_sentence_list(
         corpus_source, corpus_references, corpora)
     all_sentences = list(set(all_sentences))
-    # with open(filename, "w") as fl:
-    # fl.write("\n".join(all_sentences))
     ucca_parse_sentences(all_sentences, ucca_parse_dir, UCCA_MODEL_PATH)
     return corpus_source, corpus_references, corpora
 
@@ -955,12 +928,6 @@ class Imeasure_callable(object):
             res = [self.get_score(r) for r in res]
         else:
             print(scores)
-            # res = None
-            # for x, y in zip(*scores):
-            #     if res is None:
-            #         res = [x,y]
-            #     else:
-            #         res = []
             res = reduce(lambda x, y: (iev.add_counter_counter(
                 x[0], y[0]), iev.add_counter_counter(x[1], y[1])), zip(*scores))
             assert len(res) == 2
