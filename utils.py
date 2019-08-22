@@ -170,6 +170,7 @@ def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
     if ids is None:
         ids = repeat(repeat(None))
         sequence_of_lists = True
+    # count discongruent
     for sub_x, sub_y, sub_ids in zip(xs, ys, ids):
         last = None
         for i, (x_i, y_i, i_id) in enumerate(zip(sub_x, sub_y, sub_ids)):
@@ -185,6 +186,7 @@ def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
                     y_dir = y_i - y_j > 0
                     if x_dir != y_dir and y_i != y_j:
                         nd += 1
+    # calculate partial ordering kendall tau (only number of pairs and nd number of discongruent are needed)
     pairs_num_sqrt = math.sqrt(len(pairs))
     z = 2 * nd / pairs_num_sqrt - pairs_num_sqrt
     p = 2 * norm.cdf(-abs(z))
