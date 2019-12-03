@@ -160,11 +160,15 @@ def kendall_mergesort(offs, length, x, y, perm, temp):
     return exchcnt
 
 
-def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
-    """ calculates tau-a, assumes no ties"""
+def kendall_partial_order_from_seq(xs, ys, sentences="", ids=None):
+    """ calculates tau-a, assumes no ties
+    xs - a list of lists of numbers
+    ys - a list of lists of numbers with the dame dimensions as  xs
+    sentences - legacy, ignore this
+    ids - input pairs directly # not well documented
+    """
     nd = 0
     # currently assumes list of ranks instead of many lists which may contain repetitions should use x_ids, y_ids to remove counting pairs that were seen already
-    exchanges = []
     pairs = set()
     sequence_of_lists = True
     if ids is None:
@@ -172,13 +176,14 @@ def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
         sequence_of_lists = True
     # count discongruent
     for sub_x, sub_y, sub_ids in zip(xs, ys, ids):
-        last = None
         for i, (x_i, y_i, i_id) in enumerate(zip(sub_x, sub_y, sub_ids)):
             half_sub_ids = sub_ids[i + 1:] if not sequence_of_lists else repeat(None)
             for x_j, y_j, j_id in zip(sub_x[i + 1:], sub_y[i + 1:], half_sub_ids):
                 if sequence_of_lists or (i_id, j_id) not in pairs:
+                    if x_i == x_j:
+                        continue
                     if sequence_of_lists:
-                        pairs.add(len(pairs))
+                        pairs.add(len(pairs)) # assumes lists contain no repetitions, so this is just a way to count pairs
                     else:
                         pairs.add((i_id, j_id))
                     x_dir = x_i - x_j > 0
@@ -187,10 +192,20 @@ def kendall_partial_order_from_seq(xs, ys, sentences, ids=None):
                     if x_dir != y_dir and y_i != y_j:
                         nd += 1
     # calculate partial ordering kendall tau (only number of pairs and nd number of discongruent are needed)
-    pairs_num_sqrt = math.sqrt(len(pairs))
+    return partial_order_kendal_tau_from_counts(len(pairs), nd)
+
+
+def partial_order_kendal_tau_from_counts(num_pairs, nd):
+    """
+    given a count of pairs and the number of incongruent ones, calculate the kendal tau partial order generalization
+    :param num_pairs: number of pairs
+    :param nd: number of discongruent pairs
+    :return:
+    """
+    pairs_num_sqrt = math.sqrt(num_pairs)
     z = 2 * nd / pairs_num_sqrt - pairs_num_sqrt
     p = 2 * norm.cdf(-abs(z))
-    return 1 - 2 * nd / len(pairs), p
+    return 1 - 2 * nd / num_pairs, p
 
 
 def kendall_in_parts(xs, ys):
@@ -285,3 +300,26 @@ def traverse_chains(chains):
     for chain in chains:
         for tple in chain:
             yield tple
+
+if __name__ == '__main__':
+    # example code that with 0 correlation
+    xs = [[283, 231, 292, 305, 210],
+[232, 166, 214, 239, 181],
+[273, 242, 268, 313, 155],
+[153, 115, 165, 187, 142],
+[71, 96, 67, 94, 38],
+[348, 229, 316, 387, 294],
+[6, 6, 5, 7, 3],
+[346, 219, 328, 330, 273],
+[22, 23, 20, 24, 15],
+[97, 74, 99, 107, 71],
+[367, 433, 409, 437, 258],
+[62, 50, 109, 68, 73],
+[116, 40, 76, 77, 73],
+[114, 111, 115, 126, 67],
+[8, 0, 5, 5, 8],
+[202, 145, 201, 216, 149],
+[13, 9, 13, 15, 16]] 
+    xs = [[1,2,3,4],[1,3,2,4]] # high correlation
+    ys = [[i for i in range(len(x))] for x in xs]
+    print(kendall_partial_order_from_seq(xs, ys))
