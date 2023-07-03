@@ -12,9 +12,11 @@ utils.py contains among other things the way to compute partial ordering kendall
 
 If you use this repository in a research, please cite
 
+```
 @inproceedings{choshen2018automatic,
   title={Automatic Metric Validation for Grammatical Error Correction},
   author={Leshem Choshen and Omri Abend},
   booktitle={ACL},
   year={2018}
 }
+```
